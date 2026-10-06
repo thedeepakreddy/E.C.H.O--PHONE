@@ -26,12 +26,14 @@
   text-size-adjust: 100%;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; overscroll-behavior: none; }
-/* Sized by --app-h, set from the screen in a Home Screen app: iOS lays the
-   page out a status bar short there, which left a gap under the tab bar. The
-   transform makes body the box every fixed view, sheet and the tab bar sit in. */
+html, body { margin: 0; height: var(--app-h, 100%); background: var(--bg); overflow: hidden; overscroll-behavior: none; }
+/* A Home Screen app on iOS lays the page out a status bar short of the screen,
+   and draws position:fixed layers only inside that short box — a gap under the
+   tab bar, or the tab bar cut in half. So body is ordinary page content sized
+   to the screen (--app-h), and its transform makes it the box every "fixed"
+   view, sheet and the tab bar sit in: they are painted all the way down. */
 body {
-  position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); transform: translateZ(0); color: var(--text);
+  position: relative; height: var(--app-h, 100%); transform: translateZ(0); color: var(--text);
   font: 400 15px/1.4 -apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased; touch-action: manipulation; user-select: none; -webkit-user-select: none;
 }

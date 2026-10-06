@@ -43,18 +43,22 @@
   function fitViewport() {
     // A Home Screen app on iOS reports a page a status bar shorter than the
     // screen, which left a gap under the tab bar; in portrait use the screen.
-    const portrait = window.innerWidth < window.innerHeight;
-    const appH = standalone && portrait ? Math.max(window.innerHeight, screen.height) : window.innerHeight;
-    document.documentElement.style.setProperty("--app-h", `${Math.round(appH)}px`);
     const h = vv ? vv.height : window.innerHeight;
     document.documentElement.style.setProperty("--vvh", `${Math.round(h)}px`);
     const keyboard = vv ? window.innerHeight - vv.height > 140 : false;
+    // While the keyboard is up, keep the page exactly the viewport's height so
+    // iOS has nothing to scroll; the chat view sizes itself from --vvh then.
+    const portrait = window.innerWidth < window.innerHeight;
+    const appH = standalone && portrait && !keyboard ? Math.max(window.innerHeight, screen.height) : window.innerHeight;
+    document.documentElement.style.setProperty("--app-h", `${Math.round(appH)}px`);
     const typing = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
     body.classList.toggle("kb", !!(keyboard && typing));
     if (vv && vv.offsetTop) window.scrollTo(0, 0);
     if (keyboard && currentView === "chat") scrollMessages();
   }
   if (vv) { vv.addEventListener("resize", fitViewport); vv.addEventListener("scroll", fitViewport); }
+  // The page is the screen; it never scrolls as a whole (lists scroll inside it).
+  window.addEventListener("scroll", () => { if (!body.classList.contains("kb") && window.scrollY) window.scrollTo(0, 0); }, { passive: true });
   window.addEventListener("resize", fitViewport);
   document.addEventListener("focusin", () => setTimeout(fitViewport, 50));
   document.addEventListener("focusout", () => setTimeout(fitViewport, 50));
