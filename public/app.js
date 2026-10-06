@@ -496,8 +496,8 @@
 
   // ---------- home actions ----------
   $("act-stop").addEventListener("click", async () => {
-    if (window.speechSynthesis) speechSynthesis.cancel();
-    if (talking) { talking = 1; speechEnd(); }
+    stopSpeaking();
+    voiceAskedAt = 0;
     if (cloudBusy) { cloudAbort?.abort(); setCloudBusy(false); toast("Stopped"); }
     if (!(S && macOnline)) return;
     try { await api("/stop", { json: {} }); if (mode === "mac") toast("Stopped"); } catch { toast("Couldn't reach your Mac.", true); }
@@ -544,11 +544,13 @@
   // (Chat is the place for text: typed messages and voice notes get written replies.)
   let homeRec = null;
   $("act-listen").addEventListener("click", async () => {
+    // Anything still queued is dropped before the tap unlocks speech, or the
+    // unlock would play it: that was the "ghost voice" of an old reply.
+    stopSpeaking();
     primeSpeech();
     const btn = $("act-listen");
     if (!homeRec) {
-      // Talking over Echo stops it, so the microphone doesn't hear its voice.
-      if (talking && window.speechSynthesis) { speechSynthesis.cancel(); talking = 1; speechEnd(); }
+      voiceAskedAt = 0; // talking over Echo: the reply to the last question isn't wanted any more
       try { homeRec = await capture(); btn.setAttribute("aria-pressed", "true"); toast("Listening… tap again to send"); }
       catch (e) { toast(e.message || "Allow the microphone to talk to Echo.", true); }
       return;
@@ -556,7 +558,7 @@
     const wav = homeRec.stop(); homeRec = null; btn.setAttribute("aria-pressed", "false");
     if (wav.byteLength < 44 + 16000) return toast("Too short — tap, speak, then tap again.", true);
     if (mode === "phone") return void sendCloudVoice(wav, { speak: true });
-    try { await api("/voice", { body: wav }); toast("Sent to Echo"); } catch { toast("Couldn't reach your Mac.", true); }
+    try { await api("/voice", { body: wav }); voiceAskedAt = Date.now(); toast("Sent to Echo"); } catch { toast("Couldn't reach your Mac.", true); }
   });
 
   // ---------- replies read aloud on the phone ----------
@@ -564,6 +566,15 @@
   // arrives seconds after the tap. So every Listen tap starts a silent sentence,
   // which keeps the voice unlocked for the reply.
   let firstEvents = true, eventsNext = 0;
+  /** When this phone last sent its voice from the Echo page: only the answer to that is read aloud. */
+  let voiceAskedAt = 0;
+  const VOICE_REPLY_MS = 120_000;
+  function stopSpeaking() {
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    if (talking) { talking = 1; speechEnd(); }
+  }
+  // Leaving or coming back to the app: whatever was queued is old by then, so it never plays later.
+  document.addEventListener("visibilitychange", stopSpeaking);
   function primeSpeech() {
     if (!window.speechSynthesis) return;
     try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch { /* fine */ }
@@ -576,12 +587,17 @@
       if (it.kind !== "reply" || firstEvents) continue;
       const text = String(it.line).replace(/^Echo:\s*/, "");
       if (mode === "mac") $("activity-line").textContent = text;
-      say(text); // replies to the Echo page's voice: spoken back
+      // Spoken only when it answers this phone's own Listen, and the app is open;
+      // replies to anything else (the Mac's microphone, typed chat) stay silent.
+      if (voiceAskedAt && Date.now() - voiceAskedAt < VOICE_REPLY_MS && !document.hidden) say(text);
     }
     firstEvents = false;
   }
   function say(text) {
-    if (!window.speechSynthesis) return;
+    if (!window.speechSynthesis || document.hidden) return;
+    // One reply at a time: a new one replaces anything queued, so nothing old can play later.
+    speechSynthesis.cancel();
+    if (talking) { talking = 1; speechEnd(); }
     const ut = new SpeechSynthesisUtterance(text);
     const voices = speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang));
     ut.voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices[0] || null;
