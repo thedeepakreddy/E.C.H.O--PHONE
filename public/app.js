@@ -138,7 +138,7 @@
     if (view === "chat") { unread = 0; renderBadge(); setTimeout(scrollMessages, 30); pollChat(); }
     if (view === "world") loadWorld();
     if (view === "screen") openScreen(); else closeScreen();
-    if (view === "missions" && last) renderMissions(last);
+    if (view === "missions") { if (last) renderMissions(last); renderHandoffs(); loadHandoffs(); }
     if (view === "brain" && last) renderBrain(last);
   }
   document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
@@ -228,6 +228,7 @@
   $("faceid-login").addEventListener("click", async () => {
     try {
       const o = await fetch(u("/passkey/options?purpose=login")).then((r) => r.json());
+      rememberPasskeys(o.allowCredentials);
       const cred = await navigator.credentials.get({ publicKey: {
         challenge: b64.toBuf(o.challenge), rpId: o.rpId, userVerification: "required", timeout: o.timeout,
         allowCredentials: (o.allowCredentials || []).map((c) => ({ type: "public-key", id: b64.toBuf(c.id) })),
@@ -248,6 +249,7 @@
   }
   async function faceIdConfirm() {
     const o = await api("/passkey/options?purpose=confirm");
+    rememberPasskeys(o.allowCredentials);
     const cred = await navigator.credentials.get({ publicKey: {
       challenge: b64.toBuf(o.challenge), rpId: o.rpId, userVerification: "required", timeout: o.timeout,
       allowCredentials: (o.allowCredentials || []).map((c) => ({ type: "public-key", id: b64.toBuf(c.id) })),
@@ -301,6 +303,7 @@
       for (const l of d.logs || []) { logsAfter = Math.max(logsAfter, l.id); if (l.kind !== "user") lastActivity = l; }
       macChip = (d.vitals && d.vitals.chip) ? d.vitals.chip.replace(/^Apple /, "Mac · ") : "Your Mac";
       markMac(true);
+      if (d.faceId && d.faceId.registered && !pkIds().length && !pkAsked) { pkAsked = true; api("/passkey/options?purpose=confirm").then((o) => rememberPasskeys(o.allowCredentials)).catch(() => {}); }
       if (currentView === "missions") renderMissions(d);
       if (currentView === "brain") renderBrain(d);
       renderSettings(d);
@@ -439,6 +442,7 @@
       if (!S) markMac(!!cloudInfo.macOnline);
       briefInfo = await cloudApi("/cloud/briefing");
       renderBriefSettings();
+      if (currentView === "missions") loadHandoffs();
     } catch { /* keep the last answer */ }
     renderMode();
   }
@@ -628,6 +632,7 @@
     }
     const t = el("time", "", clock(m.at));
     if (m.src === "phone") t.appendChild(el("span", "via", " · on your phone"));
+    else if (m.via === "handoff") t.appendChild(el("span", "via", " · left from your phone"));
     n.appendChild(t);
     n.dataset.k = m.k;
     put(n);
@@ -667,7 +672,7 @@
       if (copy) { if (!copy.synced) { copy.synced = true; changed = true; } continue; } // our own Phone mode message, back from the Mac
       const k = `m${m.id}-${m.at}`;
       if (chatCache.some((x) => x.k === k)) continue;
-      putMessage({ k, at: m.at, from: m.from, text: m.text, kind: m.kind, src: m.via === "phone" ? "phone" : "mac" });
+      putMessage({ k, at: m.at, from: m.from, text: m.text, kind: m.kind, src: m.via === "phone" ? "phone" : "mac", ...(m.via === "handoff" ? { via: "handoff" } : {}) });
       if (chatLoaded && m.from === "echo" && currentView !== "chat") unread++; // history is not "unread"
     }
     if (changed) saveCache();
@@ -832,7 +837,7 @@
       return;
     }
     if (a.type === "mac") {
-      if (!(S && macOnline)) return toast("Your Mac is offline. Try again when it's on.", true);
+      if (!(S && macOnline)) return openHandoff(a.data.task); // the Mac is away: leave it for later, approved with Face ID
       btn.setAttribute("aria-busy", "true");
       try { await api("/chat", { json: { text: a.data.task } }); toast("Sent to your Mac"); pollChat().catch(() => {}); }
       catch { toast("Couldn't reach your Mac.", true); }
@@ -1106,6 +1111,7 @@
       } });
       await api("/passkey/register", { json: { name: "iPhone", credential: { id: cred.id, rawId: b64.fromBuf(cred.rawId), type: cred.type, response: {
         clientDataJSON: b64.fromBuf(cred.response.clientDataJSON), attestationObject: b64.fromBuf(cred.response.attestationObject) } } } });
+      rememberPasskeys([{ id: cred.id }]);
       sw.setAttribute("aria-checked", "true"); toast("Face ID is on");
     } catch (e) { if (e && e.name !== "NotAllowedError") toast(e.message || "Couldn't turn on Face ID.", true); }
   });
@@ -1351,6 +1357,93 @@
     } catch { box.hidden = true; }
   }
 
+  // ---------- Hand-off to the Mac ----------
+  // A job left here while the Mac is away. Face ID approves its exact text (the
+  // passkey signs a hash of it); the Mac checks that before running anything.
+  let handoffPrepared = null, handoffItems = [], hoTimer = 0, pkAsked = false;
+  function pkIds() { try { return JSON.parse(store.get("echo_pk_ids") || "[]"); } catch { return []; } }
+  function rememberPasskeys(list) {
+    const ids = [...new Set([...pkIds(), ...(list || []).map((c) => c && c.id).filter((x) => typeof x === "string")])].slice(-10);
+    if (ids.length) store.set("echo_pk_ids", JSON.stringify(ids));
+  }
+  async function prepareHandoff() {
+    $("ho-approve").disabled = true;
+    const text = $("ho-text").value.trim();
+    if (!text) { handoffPrepared = null; return; }
+    const task = { id: crypto.randomUUID(), text, createdAt: Date.now() };
+    const canon = JSON.stringify({ v: 1, id: task.id, text: task.text, createdAt: task.createdAt, device: DEV });
+    const challenge = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon));
+    if ($("ho-text").value.trim() !== text) return; // edited meanwhile: the next pass prepares it
+    handoffPrepared = { task, challenge };
+    $("ho-approve").disabled = false;
+  }
+  function openHandoff(text = "") {
+    if (!passValid()) return toast("Sign in once with your Mac online first.", true);
+    if (last && last.faceId && last.faceId.available && !last.faceId.registered) return toast("Turn on Face ID in Settings first, while your Mac is online.", true);
+    $("ho-text").value = text;
+    openSheet("sheet-handoff");
+    prepareHandoff();
+  }
+  $("ho-text").addEventListener("input", () => { $("ho-approve").disabled = true; clearTimeout(hoTimer); hoTimer = setTimeout(prepareHandoff, 250); });
+  $("ho-approve").addEventListener("click", async () => {
+    const p = handoffPrepared;
+    if (!p) return;
+    if (Date.now() - p.task.createdAt > 8 * 60_000) { prepareHandoff(); return toast("Tap Approve again."); }
+    // Face ID straight from the tap: Safari only allows it while the tap is fresh.
+    const ids = pkIds();
+    let cred;
+    try {
+      cred = await navigator.credentials.get({ publicKey: {
+        challenge: p.challenge, rpId: location.hostname, userVerification: "required", timeout: 60_000,
+        ...(ids.length ? { allowCredentials: ids.map((id) => ({ type: "public-key", id: b64.toBuf(id) })) } : {}),
+      } });
+    } catch (e) {
+      if (e && e.name === "NotAllowedError") return;
+      return toast("Face ID isn't set up for Echo on this phone. Turn it on in Settings while your Mac is online.", true);
+    }
+    try {
+      const d = await cloudApi("/cloud/handoff", { task: p.task, assertion: encodeAssertion(cred) });
+      closeSheets();
+      handoffPrepared = null;
+      toast(d.macOnline ? "Sent. Your Mac will start it in a moment." : "Waiting for your Mac. You'll get a notification when it's done.");
+      if (currentView === "missions") loadHandoffs();
+    } catch (e) { toast(cloudProblem(e), true); }
+  });
+  async function loadHandoffs() {
+    if (!passValid()) return;
+    try { handoffItems = (await cloudApi("/cloud/handoff")).items || []; } catch { /* keep the last list */ }
+    renderHandoffs();
+  }
+  const HO_STATE = { waiting: ["Waiting", "#ffb35c"], started: ["Working", "#5ee7f5"], done: ["Done", "#3ee6b0"], failed: ["Failed", "#ff6b6b"], rejected: ["Refused", "#ff6b6b"], cancelled: ["Cancelled", "#8fa3aa"] };
+  function renderHandoffs() {
+    const box = $("handoff-box");
+    clear(box);
+    if (!passValid()) return;
+    const list = el("section", "glass list");
+    const head = el("div", "row ho-head");
+    head.appendChild(el("b", "grow", "Waiting for your Mac"));
+    const add = el("button", "glass small-pill", "+ New job");
+    add.addEventListener("click", () => openHandoff(""));
+    head.appendChild(add);
+    list.appendChild(head);
+    if (!handoffItems.length) list.appendChild(el("p", "sub small empty-line", "Leave a job here and your Mac does it the next time Echo is on."));
+    for (const it of handoffItems.slice(0, 8)) {
+      const [label, color] = HO_STATE[it.status] || [it.status, "#8fa3aa"];
+      const row = el("div", "row ho-row");
+      const t = el("div", "grow");
+      t.append(el("span", "clamp2", it.text), el("span", "sub tiny", it.summary || `${label} · ${ago(it.updatedAt)}`));
+      const tag = el("span", "tag", label); tag.style.color = color;
+      row.append(t, tag);
+      if (it.status === "waiting") {
+        const x = el("button", "ho-x", "✕"); x.setAttribute("aria-label", "Cancel this job");
+        x.addEventListener("click", async () => { try { await cloudApi("/cloud/handoff/cancel", { id: it.id }); loadHandoffs(); } catch (e) { toast(cloudProblem(e), true); } });
+        row.appendChild(x);
+      }
+      list.appendChild(row);
+    }
+    box.appendChild(list);
+  }
+
   // ---------- morning briefing and notifications ----------
   function renderBriefSettings() {
     const on = !!(briefInfo && briefInfo.prefs && briefInfo.prefs.on && briefInfo.subscribed);
@@ -1469,7 +1562,7 @@
   function openFromUrl(url) {
     try {
       const v = new URL(url, location.origin).searchParams.get("view");
-      if (v === "briefing") openBriefing(); else if (v === "chat") show("chat");
+      if (v === "briefing") openBriefing(); else if (v === "chat") show("chat"); else if (v === "missions") show("missions");
     } catch { /* not ours */ }
   }
   if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "open") openFromUrl(e.data.url); });

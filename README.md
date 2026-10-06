@@ -118,6 +118,17 @@ How it's kept safe:
 - The buttons are made from the checked fields, never from text in the photo.
 - Snap has its own daily cap: `PHONE_DAILY_SNAPS`, default 30.
 
+### Hand-off to the Mac
+
+Jobs that need the Mac can wait for it:
+- **Leaving one:** use **Missions → Waiting for your Mac → New job**, or tap **Do this on my Mac** in Phone mode while the Mac is off.
+- **Approving it:** Face ID approves the job's exact text. The passkey signs a hash of the job.
+- **Running it:** the next time Echo is on, it checks that signature against the Face ID key the phone registered. A job that's edited, forged, over a week old or already run is refused. A good job runs as an ordinary Echo chat turn, so Echo's own safety approvals still apply.
+- **Order:** jobs run one at a time, oldest first, only while Echo is idle.
+- **Status:** each job shows as Waiting, Working, Done, Failed or Refused. A notification arrives when it finishes.
+
+The relay only holds jobs and can't check Face ID itself; the Mac checks it before running anything. At most 10 jobs wait at once.
+
 ## Notes
 
 - **Free plan.** Render's free services sleep after 15 minutes without traffic. While Echo runs, its polling keeps the relay awake. If the Mac has been off, the first open takes about a minute while Render wakes up. One always-on service uses about 744 of the 750 free hours a month.

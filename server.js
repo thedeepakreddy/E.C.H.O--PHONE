@@ -41,6 +41,7 @@ import { ensureSchedule } from "./lib/tick.js";
 import { vapidKeys, sendPush, validSubscription } from "./lib/push.js";
 import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick, localParts, validTz } from "./lib/briefing.js";
 import { MAX_IMAGE_B64, cleanExpense, monthTotals, recheckSnap, snapActions } from "./lib/snap.js";
+import { MAX_WAITING, FINAL, checkTask, checkAssertion, forPhone, tidy, notificationFor } from "./lib/handoff.js";
 
 export const POLL_MS = 25_000;          // how long Echo's "anything for me?" is held open
 export const REQUEST_MS = 30_000;       // how long a phone request may wait for Echo's answer
@@ -173,6 +174,21 @@ export function createRelay({
     })).catch(() => false).finally(() => { ticking = null; });
     return ticking;
   }
+  /** Hand-off jobs (lib/handoff.js), sealed under one key; changes one at a time. */
+  let handoffLock = Promise.resolve();
+  let waitingJobs = 0;
+  function withHandoffs(fn, { save = true } = {}) {
+    const run = handoffLock.then(async () => {
+      const state = tidy((await store.get("handoffs")) ?? { items: [] }, now());
+      const result = await fn(state);
+      waitingJobs = state.items.filter((i) => i.status === "waiting").length;
+      if (save) await store.set("handoffs", state);
+      return result;
+    });
+    handoffLock = run.catch(() => {});
+    return run;
+  }
+  void withHandoffs(() => {}, { save: false }).catch(() => {}); // learn how many are waiting
   const cloudHits = new Map();
   /**
    * A calendar link that needs no storage: the event is sealed into the address
@@ -286,7 +302,7 @@ export function createRelay({
       const waiter = waiters.shift();
       clearTimeout(waiter.timer);
       inFlight.set(job.id, job);
-      waiter.res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", "x-relay-pass-gen": String(passGen) });
+      waiter.res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", "x-relay-pass-gen": String(passGen), "x-relay-handoffs": String(waitingJobs) });
       waiter.res.end(JSON.stringify(job.wire));
     }
   }
@@ -349,7 +365,7 @@ export function createRelay({
     const waiter = { res, timer: setTimeout(() => {
       const i = waiters.indexOf(waiter);
       if (i >= 0) waiters.splice(i, 1);
-      res.writeHead(204, { "cache-control": "no-store", "x-relay-pass-gen": String(passGen) });
+      res.writeHead(204, { "cache-control": "no-store", "x-relay-pass-gen": String(passGen), "x-relay-handoffs": String(waitingJobs) });
       res.end();
     }, pollMs) };
     res.on("close", () => {
@@ -369,6 +385,29 @@ export function createRelay({
     lastPoll = 0;
     const gone = JSON.stringify({ error: "offline", message: "Echo went offline." });
     for (const job of [...inFlight.values(), ...queue]) job.respond(503, { "content-type": "application/json" }, gone);
+  }
+
+  /** Echo reports on a hand-off job; a finished one becomes a notification on the phone that left it. */
+  async function agentHandoffUpdate(req, res) {
+    try {
+      const b = await readJson(req, 16 * 1024);
+      if (!["started", "done", "failed", "rejected"].includes(b.status)) return send(res, 400, { error: "status" });
+      const item = await withHandoffs((st) => {
+        const it = st.items.find((i) => i.task.id === b.id);
+        if (!it || FINAL.has(it.status)) return null;
+        it.status = b.status;
+        it.summary = typeof b.summary === "string" ? b.summary.slice(0, 500) : null;
+        it.updatedAt = now();
+        return it;
+      });
+      if (!item) return send(res, 404, { error: "unknown job" });
+      const note = notificationFor(item);
+      if (note) {
+        const sub = await withPhones((phones) => phones.devices[item.task.device]?.sub ?? null, { save: false }).catch(() => null);
+        if (sub) await push(sub, { ...note, url: "/?view=missions", tag: `h-${item.task.id}` }).catch(() => {});
+      }
+      send(res, 204, "");
+    } catch { send(res, 400, { error: "bad update" }); }
   }
 
   /** What the Mac leaves for the morning briefing (Echo's phone-digest.ts), kept sealed for a week. */
@@ -443,6 +482,10 @@ export function createRelay({
       if (path === "/cloud/briefing") {
         const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
         return send(res, 200, { prefs: dev.prefs, subscribed: Boolean(dev.sub), latest: await store.get(`brief:${device}`).catch(() => null) });
+      }
+      if (path === "/cloud/handoff") {
+        const items = await withHandoffs((st) => st.items.filter((i) => i.task.device === device).map(forPhone), { save: false });
+        return send(res, 200, { items: items.reverse().slice(0, 20), macOnline: online() });
       }
       if (path === "/cloud/expenses") {
         const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
@@ -525,6 +568,32 @@ export function createRelay({
         if (!validEvent(event)) return send(res, 400, { error: "input", message: "That event is missing a title or time." });
         return send(res, 200, { url: icsUrl(event) });
       } catch (e) { return sendCloudError(res, e); }
+    }
+    if (path === "/cloud/handoff" || path === "/cloud/handoff/cancel") {
+      try {
+        const body = await readJson(req, 64 * 1024);
+        if (path === "/cloud/handoff/cancel") {
+          const ok = await withHandoffs((st) => {
+            const it = st.items.find((i) => i.task.id === body.id && i.task.device === device && i.status === "waiting");
+            if (it) { it.status = "cancelled"; it.updatedAt = now(); }
+            return Boolean(it);
+          });
+          return send(res, ok ? 200 : 409, ok ? { ok } : { error: "input", message: "That job already reached your Mac." });
+        }
+        const task = checkTask(body.task, device, now());
+        const assertion = checkAssertion(body.assertion);
+        const item = await withHandoffs((st) => {
+          if (st.items.some((i) => i.task.id === task.id)) throw Object.assign(new Error("That job is already waiting."), { input: true });
+          if (st.items.filter((i) => i.status === "waiting").length >= MAX_WAITING) throw Object.assign(new Error(`${MAX_WAITING} jobs are already waiting for your Mac.`), { input: true });
+          const it = { task, assertion, status: "waiting", summary: null, updatedAt: now() };
+          st.items.push(it);
+          return it;
+        });
+        return send(res, 200, { item: forPhone(item), macOnline: online() });
+      } catch (e) {
+        if (e?.input) return send(res, 400, { error: "input", message: e.message });
+        return sendCloudError(res, e);
+      }
     }
     if (path === "/cloud/snap/actions") {
       // The user corrected a field: the buttons are made again from the corrected snap. No AI call.
@@ -620,8 +689,13 @@ export function createRelay({
         .then((d) => send(res, 200, { results: (d?.results ?? []).map((r) => ({ name: r.name, country: r.country ?? "", admin: r.admin1 ?? "", lat: r.latitude, lon: r.longitude })) }))
         .catch(() => send(res, 502, { error: "Search is unavailable right now." }));
     }
-    if (path === "/agent/poll" || path === "/agent/reply" || path === "/agent/digest") {
+    if (path === "/agent/poll" || path === "/agent/reply" || path === "/agent/digest" || path === "/agent/handoff" || path === "/agent/handoff/update") {
       if (!agentAuthorized(req)) return send(res, 404, "Not found");
+      if (path === "/agent/handoff" && req.method === "GET") {
+        return void withHandoffs((st) => st.items.filter((i) => i.status === "waiting").map((i) => ({ task: i.task, assertion: i.assertion })), { save: false })
+          .then((items) => send(res, 200, { items })).catch(() => send(res, 503, { error: "store" }));
+      }
+      if (path === "/agent/handoff/update" && req.method === "POST") return void agentHandoffUpdate(req, res);
       if (path === "/agent/digest" && req.method === "POST") return void agentDigest(req, res);
       if (path === "/agent/poll" && req.method === "GET") return agentPoll(req, res);
       if (path === "/agent/reply" && req.method === "POST") return agentReply(req, res);

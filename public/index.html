@@ -148,6 +148,7 @@
     <button role="tab" data-seg="projects" aria-selected="false">Projects</button>
   </div>
   <div class="scroll" id="missions-scroll">
+    <div id="handoff-box"></div>
     <div id="seg-missions"></div>
     <div id="seg-agents" hidden></div>
     <div id="seg-projects" hidden></div>
@@ -323,6 +324,15 @@
   <p class="sub small">Safari didn't open. Copy the link and open it in Safari, then tap <b>Add</b>.</p>
   <button class="cta big-btn" id="cal-copy">Copy link</button>
   <button class="glass big-btn" data-close>Done</button>
+</section>
+<section class="glass sheet" id="sheet-handoff" role="dialog" aria-modal="true" aria-labelledby="ho-title" hidden>
+  <span class="grabber" aria-hidden="true"></span>
+  <h2 id="ho-title">Leave this for your Mac</h2>
+  <label for="ho-text" class="sr">The job for your Mac</label>
+  <textarea id="ho-text" class="glass ho-text" rows="4" maxlength="2000" placeholder="What should Echo do on your Mac?"></textarea>
+  <p class="sub small">Your Mac does it the next time Echo is on. Face ID approves exactly this text, and your Mac checks that before it runs anything.</p>
+  <button class="cta big-btn" id="ho-approve" disabled>Approve with Face ID</button>
+  <button class="glass big-btn" data-close>Cancel</button>
 </section>
 <section class="glass sheet" id="sheet-power" role="dialog" aria-modal="true" aria-labelledby="po-title" hidden>
   <span class="grabber" aria-hidden="true"></span>
