@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: echo-remote
+    name: echo-phone
     runtime: node
     plan: free
     buildCommand: npm install --omit=dev

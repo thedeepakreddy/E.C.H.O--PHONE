@@ -29,9 +29,9 @@ Separately, it fetches the World page from [Osiris](https://osirisai.live), plus
 2. **Push this folder to GitHub.** Use a private repo if you like; Render can read either.
 
 3. **Create the service on Render.**
-   1. Go to **New → Blueprint** and pick the repo. `render.yaml` sets up a free Node web service called `echo-remote`.
-   2. When it asks for `RELAY_SECRET`, paste the secret from step 1.
-   3. Wait for the deploy to finish. Opening `https://<your-service>.onrender.com/healthz` should show `{"ok":true,"echo":"offline"}`.
+   1. Go to **New → Blueprint** and pick the repo. `render.yaml` sets up a free Node web service called `echo-phone`.
+   2. Under the service's **Environment**, add `RELAY_SECRET` with the secret from step 1.
+   3. Wait for the deploy to finish. Opening `https://<your-service>.onrender.com/healthz` should show `{"ok":true,"echo":"offline"}`. Until the secret is set, it shows `"unpaired"`.
 
 4. **Tell Echo about it**, on the Mac:
    1. In Echo's **API keys**, set **Echo phone app** to the same secret.
