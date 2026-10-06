@@ -536,3 +536,4 @@ body.kb .br-panel { margin-bottom: 8px; }
 .br-result .srcs { display: flex; flex-wrap: wrap; gap: 6px; }
 .ba-what { font-size: 17px; font-weight: 600; line-height: 1.35; }
 @media (prefers-reduced-motion: reduce) { .br-spin, .br-progress.on { animation: none; } }
+.br-stall { position: absolute; left: 12px; right: 12px; bottom: 12px; border-radius: 22px; padding: 14px; display: flex; flex-direction: column; gap: 8px; z-index: 2; }

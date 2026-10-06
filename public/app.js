@@ -1864,7 +1864,28 @@
     recent = [{ url, title }, ...recent.filter((r) => r.url !== url)].slice(0, 12);
     store.set(RECENT_KEY, JSON.stringify(recent));
   }
-  function setLoading(on) { br.loading = on; $("br-progress").classList.toggle("on", on); }
+  let stallTimer = 0;
+  /** Loading: the bar runs; a page that hasn't come after 25 s says so, with Retry and Open in Safari. */
+  function setLoading(on) {
+    br.loading = on;
+    $("br-progress").classList.toggle("on", on);
+    clearTimeout(stallTimer);
+    $("br-stage").querySelector(".br-stall")?.remove();
+    if (on) stallTimer = setTimeout(showStall, 25_000);
+  }
+  function showStall() {
+    if (!br.loading) return;
+    const box = el("div", "glass br-stall");
+    box.append(el("b", "", "This page isn't loading"), el("p", "sub small", "The site may be slow, or it may not work without its scripts."));
+    const row = el("div", "btns2");
+    const retry = el("button", "cta big-btn", "Retry");
+    retry.addEventListener("click", () => { box.remove(); if (br.pending) loadPath(br.pending); else if (br.url) loadPath(pagePath(br.url), "reload"); });
+    const safari = el("button", "glass big-btn", "Open in Safari");
+    safari.addEventListener("click", () => { const u = br.pendingUrl || br.url; if (u) location.href = standalone ? `x-safari-${u}` : u; });
+    row.append(safari, retry);
+    box.appendChild(row);
+    $("br-stage").appendChild(box);
+  }
   function renderBrowserBar() {
     const u = $("br-url");
     if (document.activeElement !== u) u.value = br.url ? hostOf(br.url) + (new URL(br.url).pathname.length > 1 ? new URL(br.url).pathname : "") : "";
@@ -1875,6 +1896,8 @@
   async function loadPath(path, how = "go") {
     try { await browserSession(); } catch (e) { toast(cloudProblem(e), true); return; }
     br.nav = how;
+    br.pending = path;
+    br.pendingUrl = realUrl(path) || null;
     setLoading(true);
     $("br-start").hidden = true; brFrame.hidden = false;
     brFrame.contentWindow ? brFrame.contentWindow.location.replace(path) : (brFrame.src = path);
@@ -1897,19 +1920,25 @@
       br.back = br.back.slice(-50);
     }
     br.nav = null;
+    br.pending = null; br.pendingUrl = null;
     br.url = url;
     br.title = doc.title || hostOf(url);
     setLoading(false);
     renderBrowserBar();
     if (url) remember(url, br.title);
-    // A link or a form inside the page: show it's loading.
-    doc.addEventListener("click", (e) => { const a = e.target.closest && e.target.closest("a[href]"); if (a && !a.getAttribute("href").startsWith("#")) setLoading(true); }, true);
-    doc.addEventListener("submit", () => setLoading(true), true);
+    br.doc = doc;
     const refresh = doc.querySelector('meta[name="echo-refresh"]')?.content;
     if (refresh && refresh.startsWith("/b/p/") && !br.run) setTimeout(() => { if (frameDoc() === doc) loadPath(refresh); }, 1200);
     const waiters = br.waiters; br.waiters = [];
     for (const w of waiters) w();
   });
+  // A link or form tapped inside the page: Safari won't run the app's listeners
+  // in a page that may not run scripts, so watch for the next page arriving instead.
+  setInterval(() => {
+    if (currentView !== "browser" || brFrame.hidden || br.loading) return;
+    const doc = frameDoc();
+    if (doc && br.doc && doc !== br.doc && doc.readyState !== "complete") setLoading(true);
+  }, 250);
   $("br-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const v = $("br-url").value.trim();
@@ -2602,6 +2631,19 @@
 
   // ---------- go ----------
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  // A Home Screen app can stay open for days: when it comes back and the relay
+  // has a newer version, reload into it, unless something is in progress.
+  const LOADED_VERSION = document.querySelector('meta[name="app-version"]')?.content || "";
+  async function checkVersion() {
+    if (!LOADED_VERSION || LOADED_VERSION.startsWith("__")) return;
+    try {
+      const v = (await (await fetch("/version", { cache: "no-store" })).json()).app;
+      const busy = br.run || cloudBusy || !$("scrim").hidden || (document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
+      if (v && v !== LOADED_VERSION && !busy) location.reload();
+    } catch { /* offline: try next time */ }
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
+  setInterval(() => { if (!document.hidden) checkVersion(); }, 5 * 60_000);
   setComposerMode();
   renderChat();
   if (T && S) { start(); enter(); }

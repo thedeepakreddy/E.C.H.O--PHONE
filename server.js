@@ -31,6 +31,7 @@
 import http from "node:http";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveKeys, verifyPass, seal, unseal } from "./lib/secure.js";
@@ -59,6 +60,12 @@ export const LOGIN_LIMIT = 10;          // password attempts per address per win
 export const LOGIN_WINDOW_MS = 15 * 60_000;
 
 const PUBLIC = join(fileURLToPath(new URL(".", import.meta.url)), "public");
+/** The app's version: a hash of its files, so an open app can tell it's out of date and reload. */
+export const APP_VERSION = (() => {
+  const h = createHash("sha256");
+  for (const f of ["index.html", "app.js", "app.css", "humanoid-core.js", "sw.js"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
+  return h.digest("hex").slice(0, 12);
+})();
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".png": "image/png", ".jpg": "image/jpeg", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml",
@@ -891,6 +898,7 @@ export function createRelay({
       try {
         up = await fetchUpstream({ url: target, method, headers, body, limit: t.kind === "r" ? MAX_ASSET : MAX_PAGE, anyHost: browseAnyHost });
       } catch (e) {
+        if (t.kind !== "r") console.log(`[browse] ${t.kind} ${new URL(target).hostname} failed: ${e?.code ?? e?.message ?? e}`);
         if (t.kind === "r") return send(res, 502, "");
         const why = e?.code === "EBLOCKED" ? "Echo's Browser only opens public websites." : e?.code === "ENOTFOUND" ? "That site doesn't exist, or its address is mistyped." : e?.code === "ETIMEDOUT" ? "The site took too long to answer." : "The site couldn't be reached.";
         return sendPage(res, 200, notePage("Couldn't open that page", why, target));
@@ -908,6 +916,12 @@ export function createRelay({
       target = next.href; method = "GET"; body = null;
     }
     const type = String(up.headers["content-type"] ?? "").toLowerCase();
+    if (t.kind !== "r") console.log(`[browse] ${t.kind} ${new URL(target).hostname} ${up.status} ${type.split(";")[0] || "-"} ${up.body.length}b`);
+    // DuckDuckGo sometimes answers a server with a bot check instead of results: search Bing instead.
+    if (t.kind !== "r" && new URL(target).hostname === "html.duckduckgo.com" && (up.status === 202 || up.status >= 400 || /anomaly|challenge-form|bots use DuckDuckGo/i.test(up.body.subarray(0, 20000).toString("latin1")))) {
+      const q = new URL(target).searchParams.get("q");
+      if (q) return redirect(res, proxyPath("p", `https://www.bing.com/search?q=${encodeURIComponent(q)}`));
+    }
     if (t.kind === "r") {
       if (!ASSET_TYPE.test(type) || up.truncated) return send(res, 415, "");
       const assetHeaders = { "content-type": type, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; sandbox" };
@@ -950,7 +964,9 @@ export function createRelay({
     const file = normalize(join(PUBLIC, name));
     if (!file.startsWith(PUBLIC + "/") || !TYPES[extname(file)]) return send(res, 404, "Not found");
     try {
-      const data = await readFile(file);
+      let data = await readFile(file);
+      // The page knows which version of the app it is, to notice a newer one (public/app.js).
+      if (name === "index.html") data = Buffer.from(data.toString("utf8").replace("__APP_VERSION__", APP_VERSION));
       // The shell and the service worker must update the moment a new version
       // is deployed; the reactor art can sit in the cache.
       const cache = /\.(png|jpg)$/.test(file) ? "public, max-age=86400" : "no-cache";
@@ -963,7 +979,8 @@ export function createRelay({
   const handler = (req, res) => {
     const url = new URL(req.url ?? "/", "http://relay");
     const path = url.pathname;
-    if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
+    if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", app: APP_VERSION, phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
+    if (path === "/version") return send(res, 200, { app: APP_VERSION });
     if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
     if (path.startsWith("/b/")) return void browseRoute(req, res, url).catch(() => { if (!res.headersSent) sendPage(res, 502, notePage("Couldn't open that page", "Something went wrong. Try again.")); });
     if (path === "/cron/tick" && req.method === "POST") return void cronTick(req, res);
