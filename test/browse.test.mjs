@@ -104,6 +104,8 @@ function startSite() {
       if (req.url.startsWith("/find?")) { res.writeHead(200, { "content-type": "text/html" }); return res.end(`<p>found ${new URL(req.url, "http://x").searchParams.get("q")}</p>`); }
       if (req.url === "/old") { res.writeHead(301, { location: "/who" }); return res.end(); }
       if (req.url === "/s.css") { res.writeHead(200, { "content-type": "text/css" }); return res.end("body{background:url(/bg.png)}"); }
+      if (req.url === "/forbidden") { res.writeHead(403, { "content-type": "text/html" }); return res.end("<title>Access denied</title><p>Bots not allowed</p>"); }
+      if (req.url === "/denied") { res.writeHead(429, { "content-type": "text/plain" }); return res.end("slow down"); }
       if (req.url === "/x.js") { res.writeHead(200, { "content-type": "text/javascript" }); return res.end("alert(1)"); }
       res.writeHead(404, { "content-type": "text/plain" }); res.end("nope");
     });
@@ -154,6 +156,12 @@ test("relay: browse a site through a session cookie — pages, sign-in cookies, 
     assert.match(await (await get(`${proxyPath("g", `${site.base}/find`)}?q=pizza`)).text(), /found pizza/);
     assert.equal((await get(proxyPath("p", `${site.base}/old`))).headers.get("location"), proxyPath("p", `${site.base}/who`));
 
+    // A site that refuses says so in the page, for Echo to pick another; a fine page doesn't.
+    assert.match(await (await get(proxyPath("p", `${site.base}/forbidden`))).text(), /<meta name="echo-status" content="403">.*Bots not allowed/s);
+    const denied = await (await get(proxyPath("p", `${site.base}/denied`))).text();
+    assert.match(denied, /<meta name="echo-status" content="429">/);
+    assert.match(denied, /This site answered 429/);
+    assert.equal(html.includes("echo-status"), false);
     // Assets: stylesheets rewritten; scripts and pages refused.
     const css = await get(proxyPath("r", `${site.base}/s.css`));
     assert.equal(css.headers.get("content-type"), "text/css; charset=utf-8");
@@ -292,6 +300,31 @@ test("browsing model: the best Flash model on the key, and Phone mode's own when
   assert.equal(used.at(-1), "gemini-2.5-flash", "then it's back");
 });
 
+test("browsing models: two strong ones in turn, each resting on its own, then Phone mode's", async () => {
+  const own = "gemini-3.1-flash-lite";
+  const { pickBrowseModels } = await import("../lib/gemini.js");
+  assert.deepEqual(pickBrowseModels(["gemini-3.8-flash", "gemini-2.5-flash", "gemini-3-flash-preview", own], own, 2), ["gemini-3.8-flash", "gemini-2.5-flash"]);
+  const store = createStore({ key: deriveKeys(SECRET).store, now: () => NOW });
+  const used = [];
+  const down = new Set(["gemini-3.8-flash"]);
+  const gemini = { model: own, browseModels: ["gemini-3.8-flash", "gemini-2.5-flash"], generate: async (b, o) => {
+    used.push(o.modelId);
+    if (down.has(o.modelId)) throw new GeminiError("server", "This model is currently experiencing high demand.");
+    return call("search", { query: "x", memory: "m" });
+  } };
+  let t = NOW;
+  const cloud = createCloud({ gemini, store, now: () => t, tools: {} });
+  const step = () => cloud.browseStep({ task: "x", plan: PLAN, current: 1, page: {}, blocked: ["www.tripadvisor.com"] });
+  await step();
+  assert.deepEqual(used, ["gemini-3.8-flash", "gemini-2.5-flash"], "overloaded: the second strong model answers, not Lite");
+  down.add("gemini-2.5-flash");
+  await step();
+  assert.deepEqual(used.slice(2), ["gemini-2.5-flash", own], "the first rests; the second is down too: Phone mode's own");
+  t += 121_000; down.clear();
+  await step();
+  assert.equal(used.at(-1), "gemini-3.8-flash", "after two minutes the best one is back");
+});
+
 test("actions are checked: unknown ones, bad numbers and non-web addresses become a failed try", () => {
   assert.equal(checkAction({ name: "run_js", args: {} }).name, "step_failed");
   assert.equal(checkAction({ name: "click", args: { index: "7" } }).name, "step_failed");
@@ -300,6 +333,7 @@ test("actions are checked: unknown ones, bad numbers and non-web addresses becom
   assert.ok(ACTIONS.every((a) => a.parameters.type === "OBJECT"));
   const c = stepContents({ task: "t", plan: PLAN, current: 1, page: { url: "u", title: "T", text: "x".repeat(20000), part: 1, parts: 2 }, notes: ["n"] });
   assert.match(c[0].parts[0].text, /part 1 of 2; read_more for the next/);
+  assert.match(stepContents({ task: "t", plan: PLAN, current: 1, page: {}, blocked: ["www.tripadvisor.com", "www.google.com"] })[0].parts[0].text, /Sites that don't let Echo's Browser in \(don't open them\): www\.tripadvisor\.com, www\.google\.com/);
   assert.ok(c[0].parts[0].text.length < 16_000, "the page is clipped");
 });
 

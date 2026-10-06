@@ -1922,6 +1922,9 @@
     br.nav = null;
     br.pending = null; br.pendingUrl = null;
     br.url = url;
+    // A site that refused Echo's Browser (403, 429, 5xx, or couldn't be reached): Echo won't try it again this task.
+    br.status = doc.querySelector('meta[name="echo-status"]')?.content || null;
+    if (br.status && br.run && hostOf(url)) br.run.blocked = [...new Set([...(br.run.blocked || []), hostOf(url)])].slice(-20);
     br.title = doc.title || hostOf(url);
     setLoading(false);
     renderBrowserBar();
@@ -2045,13 +2048,15 @@
       const lines = [`Search results for "${results.query}" (only the results are shown; the rest of this page is menus and ads):`];
       for (const r of results.items) {
         elements.push(r.link);
-        lines.push(`[${elements.length}]<link>${r.title}</link> — ${r.url}${r.snippet ? `\n    ${r.snippet}` : ""}`);
+        const blocked = br.run && (br.run.blocked || []).includes(hostOf(r.url));
+        lines.push(`[${elements.length}]<link>${r.title}</link> — ${r.url}${blocked ? " (this site blocks Echo's Browser: skip it)" : ""}${r.snippet ? `\n    ${r.snippet}` : ""}`);
       }
       if (results.next) { elements.push(results.next); lines.push(`[${elements.length}]<link>Next page of results</link>`); }
       return { text: lines.join("\n"), elements };
     }
     const win = brFrame.contentWindow;
     const elements = [], out = [];
+    if (br.status) out.push(`(This site answered ${br.status === "error" ? "with an error" : br.status}${br.status === "403" ? " Forbidden" : br.status === "429" ? " Too Many Requests" : ""}: it doesn't let Echo's Browser in. Don't use it; go back and choose another site.)\n\n`);
     // The page's main content first, then the rest (menus, sidebars, footer).
     const main = [...doc.querySelectorAll("main, [role=main], article, #content, #main, #mw-content-text")].find((m) => (m.innerText || "").trim().length > 400) || null;
     let skipNode = null;
@@ -2108,6 +2113,7 @@
     act();
     const ok = await loaded;
     if (!ok && expectLoad && br.loading) return "The page is taking long to load.";
+    if (br.status) return `The site ${hostOf(br.url)} refused Echo's Browser (${br.status}). Don't use it again: go back and choose another site.`;
     return br.url !== before ? `Now on "${tidy(br.title, 80)}" (${tidy(br.url, 120)})` : "Done; still on the same page.";
   }
   function highlight(e) {
@@ -2198,6 +2204,8 @@
       case "click": {
         const e = pick(a.args.index);
         if (!e) return `There's no element [${a.args.index}] on this page now.`;
+        const to = e.tagName === "A" && realUrl(e.href);
+        if (to && (run.blocked || []).includes(hostOf(to))) return `${hostOf(to)} doesn't let Echo's Browser in (it refused earlier). Choose another link.`;
         const unmark = highlight(e);
         if (needsApproval(a, e)) {
           const ok = await askApproval(`${a.args.why || "Continue"}: tap "${elLabel(e)}"`);
@@ -2238,8 +2246,17 @@
         e.dispatchEvent(new Event("change", { bubbles: true }));
         return `Chose "${tidy(opt.text, 60)}".`;
       }
-      case "open_url": return settle(() => goTo(a.args.url));
+      case "open_url": {
+        if ((run.blocked || []).includes(hostOf(a.args.url))) return `${hostOf(a.args.url)} doesn't let Echo's Browser in (it refused earlier). Choose another site.`;
+        return settle(() => goTo(a.args.url));
+      }
       case "search": {
+        // Three searches per try: after that, open one of the results.
+        if ((run.searches = (run.searches || 0) + 1) > 3) {
+          const doc0 = frameDoc();
+          const res0 = doc0 && searchResults(doc0);
+          return `Not searched: that's the 4th search in this try. Open one of the results instead${res0 ? `: ${res0.items.slice(0, 6).map((r, k) => `${k + 1}. ${tidy(r.title, 70)} — ${r.url}`).join(" | ")}` : " (go back to the results page)"}.`;
+        }
         const where = await settle(() => goInput(a.args.query, true));
         const doc = frameDoc();
         const res = doc && searchResults(doc);
@@ -2348,12 +2365,13 @@
       if (st.attempts === 1 || !st.startUrl) st.startUrl = br.url;
       else if (br.url !== st.startUrl) { renderRun(`Step ${run.cur + 1} of ${total} · try ${st.attempts}`, "Starting this step again"); await settle(() => goTo(st.startUrl)); }
       st.history = [];
+      run.searches = 0;
       let why = "";
       for (let k = 0; k < MAX_ACTIONS_PER_TRY && !run.stopped; k++) {
         if (run.actions >= MAX_ACTIONS) { why = "The task took too many actions overall."; break; }
         const d = await callBrowse(run, "/cloud/browse/step", {
           task: run.task, plan: wirePlan(run), current: run.cur, attempt: st.attempts, lastFail: st.lastFail, memory: run.memory,
-          history: st.history.map(({ action, args, result }) => ({ action, args, result })), notes: run.notes, page: pageNow(run), userSaid: run.userSaid, context: { tz: localTz() },
+          history: st.history.map(({ action, args, result }) => ({ action, args, result })), notes: run.notes, page: pageNow(run), userSaid: run.userSaid, blocked: run.blocked || [], context: { tz: localTz() },
         });
         if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
         run.notes.push(...(d.notes || []));

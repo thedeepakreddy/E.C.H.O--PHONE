@@ -21,7 +21,7 @@
  *   UPSTASH_REDIS_REST_TOKEN
  *   QSTASH_TOKEN               the 5-minute tick (QSTASH_URL if the console shows one)
  *   GEMINI_EMBED_MODEL         search by meaning in saved memory (default gemini-embedding-001)
- *   GEMINI_BROWSE_MODEL        Echo's browsing (default: the best Flash model the key can use)
+ *   GEMINI_BROWSE_MODEL        Echo's browsing, comma-separated in order (default: the two best Flash models the key can use)
  *
  * Phone mode is reached with a cloud pass that Echo on the Mac signs at sign-in
  * (lib/secure.js), so the relay can trust it while the Mac is off. It can never
@@ -37,7 +37,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveKeys, verifyPass, seal, unseal } from "./lib/secure.js";
 import { createStore } from "./lib/store.js";
-import { createGemini, pickBrowseModel } from "./lib/gemini.js";
+import { createGemini, pickBrowseModels } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
 import { ensureSchedule } from "./lib/tick.js";
@@ -714,7 +714,7 @@ export function createRelay({
           if (path === "/cloud/browse/report") return send(res, 200, await cloud.browseReport({ task: b.task, plan: b.plan, notes: b.notes, sources: b.sources, context }));
           return send(res, 200, await cloud.browseStep({
             task: b.task, plan: b.plan, current: b.current, attempt: b.attempt, lastFail: b.lastFail, memory: b.memory,
-            history: b.history, notes: b.notes, page: b.page, userSaid: b.userSaid, context,
+            history: b.history, notes: b.notes, page: b.page, userSaid: b.userSaid, blocked: Array.isArray(b.blocked) ? b.blocked.slice(0, 20).map(String) : [], context,
           }));
         }
       } catch (e) {
@@ -884,6 +884,8 @@ export function createRelay({
     return result;
   }
 
+  const markStatus = (html, status) => (status === "error" || status >= 400 ? html.replace('<meta charset="utf-8">', `<meta charset="utf-8"><meta name="echo-status" content="${status}">`) : html);
+
   async function browseRoute(req, res, url) {
     const path = url.pathname;
     const who = await browseClaims(req);
@@ -930,7 +932,7 @@ export function createRelay({
         const q = new URL(target).hostname === "html.duckduckgo.com" ? new URL(target).searchParams.get("q") : null;
         if (q) return redirect(res, proxyPath("p", SEARCH_URL(q)));
         const why = e?.code === "EBLOCKED" ? "Echo's Browser only opens public websites." : e?.code === "ENOTFOUND" ? "That site doesn't exist, or its address is mistyped." : e?.code === "ETIMEDOUT" ? "The site took too long to answer." : "The site couldn't be reached.";
-        return sendPage(res, 200, notePage("Couldn't open that page", why, target));
+        return sendPage(res, 200, markStatus(notePage("Couldn't open that page", why, target), "error"));
       }
       const setCookie = up.headers["set-cookie"];
       if (storeCookies(jarE.jar, target, Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [], now())) void saveJar(who.d);
@@ -958,7 +960,9 @@ export function createRelay({
       return send(res, 200, up.body, assetHeaders);
     }
     const looksHtml = /html|xml/.test(type) || (!type && /^\s*</.test(up.body.subarray(0, 200).toString("latin1")));
-    if (looksHtml) return sendPage(res, 200, rewriteHtml(decodeBody(up.body, type), target).html);
+    // A site that refused (403, 429, 5xx): the page says so, for Echo to choose another site.
+    if (looksHtml) return sendPage(res, 200, markStatus(rewriteHtml(decodeBody(up.body, type), target).html, up.status));
+    if (up.status >= 400) return sendPage(res, 200, markStatus(notePage(`This site answered ${up.status}`, "It doesn't let Echo's Browser in. Try another site, or ⋯ → Open the real page.", target), up.status));
     if (type.startsWith("text/plain")) {
       const text = decodeBody(up.body, type).slice(0, 400_000).replace(/&/g, "&amp;").replace(/</g, "&lt;");
       return sendPage(res, 200, `<!doctype html><meta charset="utf-8"><meta name="echo-url" content="${target.replace(/"/g, "&quot;")}"><meta name="viewport" content="width=device-width, initial-scale=1"><pre style="white-space:pre-wrap;font:14px/1.45 ui-monospace,Menlo,monospace;padding:14px;margin:0">${text}</pre>`);
@@ -1086,9 +1090,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // Browsing uses a stronger model with its own free quota: GEMINI_BROWSE_MODEL, or the best Flash model this key has.
   if (gemini) {
     const chosen = String(env.GEMINI_BROWSE_MODEL ?? "").trim();
-    if (chosen) { gemini.browseModel = chosen; console.log(`Browsing: ${chosen} (GEMINI_BROWSE_MODEL)`); }
+    if (chosen) { gemini.browseModels = chosen.split(",").map((x) => x.trim()).filter(Boolean); console.log(`Browsing: ${gemini.browseModels.join(" → ")} (GEMINI_BROWSE_MODEL)`); }
     else gemini.listModels()
-      .then((names) => { gemini.browseModel = pickBrowseModel(names, gemini.model); console.log(`Browsing: ${gemini.browseModel ?? gemini.model}${gemini.browseModel ? "" : " (no other Flash model on this key)"}`); })
+      .then((names) => { gemini.browseModels = pickBrowseModels(names, gemini.model, 2); console.log(`Browsing: ${[...gemini.browseModels, gemini.model].join(" → ")}${gemini.browseModels.length ? "" : " (no other Flash model on this key)"}`); })
       .catch((e) => console.log(`Browsing: ${gemini.model} (couldn't list models: ${e?.message ?? e})`));
   }
   if (paired && env.QSTASH_TOKEN) {
