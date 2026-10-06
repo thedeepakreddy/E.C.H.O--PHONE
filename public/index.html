@@ -266,6 +266,12 @@
   <input type="file" accept="image/*" id="snap-file" hidden>
 </section>
 
+<!-- ============ SAVED: Echo's memory (pushed) ============ -->
+<section id="v-memory" class="view list-view" aria-label="Saved" hidden>
+  <header class="top push"><button class="glass pill back" id="mem-back">‹ Back</button><h1 id="mem-h">Saved</h1><button class="bubble b44" id="mem-new" aria-label="Write something for Echo to remember"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></header>
+  <div class="scroll" id="mem-body"></div>
+</section>
+
 <!-- ============ BRIEFING (pushed) ============ -->
 <section id="v-briefing" class="view list-view" aria-label="Briefing" hidden>
   <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Today</h1><button class="bubble b44" id="brief-refresh" aria-label="Brief me now"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg></button></header>
@@ -333,6 +339,19 @@
   <textarea id="ho-text" class="glass ho-text" rows="4" maxlength="2000" placeholder="What should Echo do on your Mac?"></textarea>
   <p class="sub small">Your Mac does it the next time Echo is on. Face ID approves exactly this text, and your Mac checks that before it runs anything.</p>
   <button class="cta big-btn" id="ho-approve" disabled>Approve with Face ID</button>
+  <button class="glass big-btn" data-close>Cancel</button>
+</section>
+<section class="glass sheet" id="sheet-memnote" role="dialog" aria-modal="true" aria-labelledby="mn-title" hidden>
+  <span class="grabber" aria-hidden="true"></span>
+  <h2 id="mn-title">Remember this</h2>
+  <label for="mn-text" class="sr">What Echo should remember</label>
+  <textarea id="mn-text" class="glass ho-text" rows="4" maxlength="2000" placeholder="What should Echo remember? e.g. My gym locker code is 4471"></textarea>
+  <div class="glass list">
+    <div class="row"><label for="mn-date" class="grow">Date <span class="sub">(optional)</span></label><input type="date" id="mn-date" class="row-select"></div>
+    <div class="row"><label for="mn-what" class="sr">What happens on that date</label><input id="mn-what" class="row-input" maxlength="100" placeholder="What happens then, e.g. Passport expires"></div>
+  </div>
+  <p class="sub small">With a date, Echo reminds you 7 days and 1 day before.</p>
+  <button class="cta big-btn" id="mn-save" disabled>Save</button>
   <button class="glass big-btn" data-close>Cancel</button>
 </section>
 <section class="glass sheet scroll-sheet" id="sheet-phonecal" role="dialog" aria-modal="true" aria-labelledby="pc-title" hidden>

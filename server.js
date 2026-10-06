@@ -20,6 +20,7 @@
  *   UPSTASH_REDIS_REST_URL     durable, encrypted storage
  *   UPSTASH_REDIS_REST_TOKEN
  *   QSTASH_TOKEN               the 5-minute tick (QSTASH_URL if the console shows one)
+ *   GEMINI_EMBED_MODEL         search by meaning in saved memory (default gemini-embedding-001)
  *
  * Phone mode is reached with a cloud pass that Echo on the Mac signs at sign-in
  * (lib/secure.js), so the relay can trust it while the Mac is off. It can never
@@ -42,6 +43,7 @@ import { vapidKeys, sendPush, validSubscription } from "./lib/push.js";
 import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick, localParts, validTz, parsePhoneCalendar } from "./lib/briefing.js";
 import { MAX_IMAGE_B64, cleanExpense, monthTotals, recheckSnap, snapActions } from "./lib/snap.js";
 import { MAX_WAITING, FINAL, checkTask, checkAssertion, forPhone, tidy, notificationFor } from "./lib/handoff.js";
+import { createMemory, fromSnap, fromNote, forPhone as memoryForPhone, syncDates, contextText, comingUp } from "./lib/memory.js";
 
 export const POLL_MS = 25_000;          // how long Echo's "anything for me?" is held open
 export const REQUEST_MS = 30_000;       // how long a phone request may wait for Echo's answer
@@ -209,7 +211,23 @@ export function createRelay({
   /** Scan history per phone: what each snap found (never the photo), kept apart from the tick's data. */
   const withSnaps = (device, fn, opts) => withKey(`snaps:${device}`, () => ({ items: [] }), fn, opts);
   const snapSummary = (e) => ({ id: e.id, at: e.at, kind: e.snap.kind, title: e.snap.title, summary: e.snap.summary,
-    amount: e.snap.amount, currency: e.snap.currency, date: e.snap.dueDate ?? e.snap.purchaseDate ?? e.snap.eventStart ?? null, done: e.done ?? {} });
+    amount: e.snap.amount, currency: e.snap.currency, date: e.snap.dueDate ?? e.snap.purchaseDate ?? e.snap.eventStart ?? null, done: e.done ?? {}, saved: e.done?.memory ?? null });
+  /** Memory (lib/memory.js): saved items per phone; their dates go into the tick's data. */
+  const memory = createMemory({
+    store, withKey, now, newId: () => randomUUID().slice(0, 8),
+    embed: gemini?.embed ? (text, opts) => gemini.embed(text, opts) : null,
+    onDates: (device, items, tz) => withPhones((phones) => { syncDates(deviceOf(phones, device), items, tz, now()); }),
+  });
+  /** Memory as Echo's phone brain uses it: this phone's, found or saved by the tools in lib/cloud.js. */
+  async function memoryFor(device, tz) {
+    const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
+    const zone = validTz(tz) ? tz : dev.prefs?.tz;
+    return {
+      upcoming: comingUp(dev, now(), zone, 30),
+      search: async (q) => (await memory.search(device, q, { k: 4 })).map((h) => ({ text: contextText(h.meta, h.body) })),
+      save: async (note) => (await memory.add(device, fromNote(note), { tz: zone })).item,
+    };
+  }
   function withLinks(actions) {
     for (const a of actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
     return actions;
@@ -518,7 +536,19 @@ export function createRelay({
         if (!e) return send(res, 404, { error: "input", message: "That scan was deleted." });
         const tz = validTz(new URL(req.url, "http://x").searchParams.get("tz")) ? new URL(req.url, "http://x").searchParams.get("tz") : "UTC";
         const actions = withLinks(snapActions(e.snap, { today: localParts(now(), tz).date })).map((a) => ({ ...a, done: Boolean(e.done?.[a.type] && (a.type === "expense" || a.type === "reminder")) }));
-        return send(res, 200, { id: e.id, at: e.at, snap: e.snap, actions });
+        return send(res, 200, { id: e.id, at: e.at, snap: e.snap, actions, saved: e.done?.memory ?? null });
+      }
+      if (path === "/cloud/memory") {
+        const q = new URL(req.url, "http://x").searchParams;
+        const id = q.get("id");
+        if (id) {
+          const found = await memory.get(device, id);
+          if (!found) return send(res, 404, { error: "input", message: "That was deleted." });
+          return send(res, 200, { item: memoryForPhone(found.meta), body: found.body });
+        }
+        const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
+        const items = await memory.list(device);
+        return send(res, 200, { items: items.slice().reverse().map(memoryForPhone), upcoming: comingUp(dev, now(), validTz(q.get("tz")) ? q.get("tz") : dev.prefs?.tz, 30) });
       }
       if (path === "/cloud/calendar") {
         const key = await withPhones((phones) => { const d = deviceOf(phones, device); d.calKey ??= randomBytes(18).toString("base64url"); return d.calKey; });
@@ -627,6 +657,50 @@ export function createRelay({
         return send(res, 200, { ok: true });
       } catch (e) { return sendCloudError(res, e); }
     }
+    if (path.startsWith("/cloud/memory/")) {
+      try {
+        const body = await readJson(req, 64 * 1024);
+        const tz = validTz(body.tz) ? body.tz : undefined;
+        if (path === "/cloud/memory/save" || path === "/cloud/memory/search") {
+          if (rateLimited(device)) return send(res, 429, { error: "busy", message: "Slow down a little — too many requests this minute." });
+        }
+        if (path === "/cloud/memory/save") {
+          let draft;
+          if (body.note) draft = fromNote(body.note);
+          else {
+            const snapId = typeof body.snapId === "string" ? body.snapId : null;
+            const kept = snapId ? await withSnaps(device, (st) => st.items.find((x) => x.id === snapId) ?? null, { save: false }) : null;
+            const snap = body.snap ?? kept?.snap;
+            if (!snap) return send(res, 400, { error: "input", message: "That scan was deleted. Snap it again to save it." });
+            draft = fromSnap(snap, { snapId: kept ? snapId : null });
+          }
+          const { item, existing } = await memory.add(device, draft, { tz });
+          if (draft.snapId) await withSnaps(device, (st) => { const e = st.items.find((x) => x.id === draft.snapId); if (e) e.done = { ...(e.done ?? {}), memory: item.id }; });
+          return send(res, 200, { item: memoryForPhone(item), existing });
+        }
+        if (path === "/cloud/memory/update") {
+          const item = await memory.update(device, String(body.id ?? ""), {
+            ...(typeof body.title === "string" ? { title: body.title } : {}), ...(typeof body.text === "string" ? { text: body.text } : {}),
+            ...(Array.isArray(body.dates) ? { dates: body.dates } : {}), ...(typeof body.remind === "boolean" ? { remind: body.remind } : {}),
+            ...(body.snap && typeof body.snap === "object" ? { snap: body.snap } : {}),
+          }, { tz });
+          return send(res, 200, { item: memoryForPhone(item) });
+        }
+        if (path === "/cloud/memory/delete") {
+          await memory.remove(device, String(body.id ?? ""), { tz });
+          await withSnaps(device, (st) => { for (const e of st.items) if (e.done?.memory === body.id) { const { memory: _, ...rest } = e.done; e.done = rest; } });
+          return send(res, 200, { ok: true });
+        }
+        if (path === "/cloud/memory/search") {
+          const hits = await memory.search(device, String(body.q ?? ""), { k: 10, withBodies: false });
+          return send(res, 200, { items: hits.map((h) => ({ ...memoryForPhone(h.meta), score: Math.round(h.score * 100) / 100 })) });
+        }
+      } catch (e) {
+        if (e?.input) return send(res, 400, { error: "input", message: e.message });
+        return sendCloudError(res, e);
+      }
+      return send(res, 404, "Not found");
+    }
     if (path === "/cloud/handoff" || path === "/cloud/handoff/cancel") {
       try {
         const body = await readJson(req, 64 * 1024);
@@ -686,12 +760,13 @@ export function createRelay({
       try {
         const body = await readJson(req, path === "/cloud/voice" ? CLOUD_VOICE_BODY : CLOUD_BODY);
         const context = { ...(body.context && typeof body.context === "object" ? body.context : {}), macOnline: online() };
+        const mem = await memoryFor(device, context.tz).catch(() => null);
         let result;
         if (path === "/cloud/voice") {
           const audio = String(body.audio ?? "");
           if (!/^[A-Za-z0-9+/=]{100,}$/.test(audio)) return send(res, 400, { error: "input", message: "That recording didn't come through." });
-          result = await cloud.chat({ history: body.history, audio, context });
-        } else result = await cloud.chat({ history: body.history, text: body.text, context });
+          result = await cloud.chat({ history: body.history, audio, context, memory: mem });
+        } else result = await cloud.chat({ history: body.history, text: body.text, context, memory: mem });
         for (const a of result.actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
         return send(res, 200, result);
       } catch (e) { return sendCloudError(res, e); }
@@ -801,7 +876,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const relaySecret = paired ? secret : randomBytes(32).toString("hex");
   const keys = deriveKeys(relaySecret);
   const store = createStore({ url: env.UPSTASH_REDIS_REST_URL, token: env.UPSTASH_REDIS_REST_TOKEN, key: keys.store });
-  const gemini = paired && env.GEMINI_API_KEY ? createGemini({ apiKey: env.GEMINI_API_KEY.trim(), model: (env.GEMINI_MODEL || "gemini-3.1-flash-lite").trim(), base: env.GEMINI_BASE || undefined }) : null;
+  const gemini = paired && env.GEMINI_API_KEY ? createGemini({
+    apiKey: env.GEMINI_API_KEY.trim(), model: (env.GEMINI_MODEL || "gemini-3.1-flash-lite").trim(),
+    embedModel: (env.GEMINI_EMBED_MODEL || "gemini-embedding-001").trim(), base: env.GEMINI_BASE || undefined,
+  }) : null;
   const relay = createRelay({
     secret: relaySecret, store, gemini, publicUrl: env.RENDER_EXTERNAL_URL || "https://echo-phone.onrender.com",
     limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200, snaps: Number(env.PHONE_DAILY_SNAPS) || 30 },

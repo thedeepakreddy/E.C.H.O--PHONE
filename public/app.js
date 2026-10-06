@@ -693,6 +693,15 @@
       }
       n.appendChild(acts);
     }
+    if (!mine && m.saved && m.saved.length) {
+      const acts = el("div", "acts");
+      for (const sv of m.saved) {
+        const chip = el("button", "glass act-btn saved-chip", `✓ Saved: ${sv.title}`);
+        chip.addEventListener("click", (e) => { e.stopPropagation(); openMemory({ id: sv.id }); });
+        acts.appendChild(chip);
+      }
+      n.appendChild(acts);
+    }
     if (!mine && m.sources && m.sources.length) {
       const srcs = el("div", "srcs");
       for (const src of m.sources) {
@@ -786,8 +795,28 @@
   }
   $("composer").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim()) sendChat(); });
   document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => sendChat(c.textContent)));
-  // Tapping the conversation puts the keyboard away.
-  messagesEl.addEventListener("click", () => input.blur());
+  // Tapping the conversation puts the keyboard away. Tapping a message offers
+  // to remember it (Saved) or copy it.
+  messagesEl.addEventListener("click", (e) => {
+    input.blur();
+    const n = e.target.closest(".msg");
+    const open = messagesEl.querySelector(".msg-tools");
+    if (e.target.closest(".msg-tools, button, a")) return;
+    if (open) { open.remove(); if (open.parentElement === n) return; }
+    if (!n || (window.getSelection && String(window.getSelection()).length)) return;
+    const m = chatCache.find((x) => x.k === n.dataset.k);
+    if (!m || !m.text || (m.kind === "voice" && m.text === "Voice message")) return;
+    const tools = el("div", "msg-tools");
+    if (passValid()) {
+      const rem = el("button", "glass small-pill", "Remember");
+      rem.addEventListener("click", () => { tools.remove(); openMemNote(m.text); });
+      tools.appendChild(rem);
+    }
+    const copy = el("button", "glass small-pill", "Copy");
+    copy.addEventListener("click", async () => { tools.remove(); try { await navigator.clipboard.writeText(m.text); toast("Copied"); } catch { toast("Couldn't copy.", true); } });
+    tools.appendChild(copy);
+    n.appendChild(tools);
+  });
 
   // ---------- Phone mode: asking Echo in the cloud ----------
   const shortcutList = () => String(store.get("echo_shortcuts") || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20);
@@ -811,7 +840,7 @@
     setCloudBusy(true);
     try {
       const d = await cloudApi(path, { ...payload, context: cloudContext() }, { signal: abort.signal });
-      const reply = { k: newKey(), at: Date.now(), from: "echo", text: d.reply, kind: "text", src: "phone", actions: d.actions || [], sources: d.sources || [] };
+      const reply = { k: newKey(), at: Date.now(), from: "echo", text: d.reply, kind: "text", src: "phone", actions: d.actions || [], sources: d.sources || [], saved: d.saved || [] };
       putMessage(reply);
       prepareActions(reply);
       lastCloudLine = d.reply;
@@ -1241,7 +1270,7 @@
   // shrunk here (which also drops its location data) and never kept anywhere.
   let snapState = null, snapCtx = null, snapTimer = 0;
   const snapFile = $("snap-file");
-  const KIND = { bill: "Bill", receipt: "Receipt", event: "Event", letter: "Letter", menu: "Menu", product: "Product", other: "Photo" };
+  const KIND = { bill: "Bill", receipt: "Receipt", event: "Event", letter: "Letter", document: "Document", menu: "Menu", product: "Product", other: "Photo" };
   const CATS = ["Groceries", "Dining", "Transport", "Shopping", "Utilities", "Health", "Entertainment", "Travel", "Other"];
   const FIELDS = {
     bill: [["amount", "Amount", "number"], ["currency", "Currency", "text"], ["dueDate", "Due", "date"], ["payee", "Pay to", "text"]],
@@ -1304,6 +1333,7 @@
     const out = [`${r.title}: ${r.summary}`];
     for (const [k, label] of [...(FIELDS[r.kind] || []), ["account", "Account"]]) if (r[k] != null && r[k] !== "") out.push(`${label}: ${r[k]}`);
     for (const d of r.deadlines || []) out.push(`Deadline: ${d.date} — ${d.what}`);
+    for (const d of r.keyDates || []) out.push(`Date: ${d.date} — ${d.what}`);
     if (r.text) out.push(`Text: ${r.text}`);
     return out.join("\n");
   }
@@ -1348,6 +1378,7 @@
       }
       if (r.account) fields.append(el("label", "", "Account"), el("span", "", `ends ${r.account}`));
       for (const d of r.deadlines || []) fields.append(el("label", "", "Deadline"), el("span", "", `${d.date} — ${d.what}`));
+      for (const d of r.keyDates || []) if (!(r.deadlines || []).some((x) => x.date === d.date)) fields.append(el("label", "", "Date"), el("span", "", `${dayLabel(d.date)} — ${d.what}`));
       if (fields.childNodes.length) c.appendChild(fields);
       if (st.id) {
         const del = el("button", "text-btn", "Delete this scan");
@@ -1358,19 +1389,44 @@
       }
       box.appendChild(c);
       if (r.translation) box.appendChild(bcard(`In English${r.language ? `, from ${r.language}` : ""}`, el("p", "small", r.translation)));
+      box.appendChild(saveToMemoryButton());
       const acts = el("div", "snap-acts"); acts.id = "snap-acts";
       box.appendChild(acts);
       renderSnapActions();
     } else {
       const c = el("section", "glass bcard");
-      c.append(el("p", "", "Photograph a bill, receipt, ticket, letter, menu or price tag. Echo reads it and offers the next step."));
+      c.append(el("p", "", "Photograph a bill, receipt, ticket, letter, document, menu or price tag. Echo reads it, offers the next step, and can remember it for you."));
       const go = el("button", "cta big-btn", "Take or choose a photo"); go.addEventListener("click", openSnap);
       c.appendChild(go); box.appendChild(c);
     }
+    const savedLink = el("button", "glass row mem-link");
+    const sl = el("span", "grow"); sl.append(el("span", "", "Saved"), el("span", "sub tiny", "What Echo remembers for you, and its dates"));
+    savedLink.append(el("span", "scan-badge note", "MEM"), sl, el("span", "sub", "›"));
+    savedLink.addEventListener("click", () => openMemory({ from: "snap" }));
+    box.appendChild(savedLink);
     const hist = el("section", "glass bcard"); hist.id = "snap-history"; box.appendChild(hist);
     const exp = el("section", "glass bcard"); exp.id = "snap-expenses"; box.appendChild(exp);
     loadScans();
     loadExpenses();
+  }
+  /** Save what this scan found to Echo's memory; once saved, the button opens it there. */
+  function saveToMemoryButton() {
+    const st = snapState;
+    const btn = el("button", `glass big-btn mem-save${st.saved ? " done" : ""}`, st.saved ? "Saved to memory ✓ · Open" : "Save to memory");
+    btn.addEventListener("click", async () => {
+      if (st.saved) return openMemory({ id: st.saved, from: "snap" });
+      btn.setAttribute("aria-busy", "true");
+      try {
+        const d = await cloudApi("/cloud/memory/save", { ...(st.id ? { snapId: st.id } : {}), snap: st.result, tz: localTz() });
+        st.saved = d.item.id;
+        const nd = nextDate(d.item);
+        toast(nd ? `Saved. Echo will remind you before ${dayLabel(nd.date)}.` : "Saved. Echo will remember it.");
+        btn.textContent = "Saved to memory ✓ · Open"; btn.classList.add("done");
+        loadScans();
+      } catch (e) { toast(cloudProblem(e), true); }
+      finally { btn.removeAttribute("aria-busy"); }
+    });
+    return btn;
   }
   function renderSnapActions() {
     const acts = $("snap-acts");
@@ -1393,6 +1449,8 @@
       const was = new Map((snapState.actions || []).filter((a) => a.done).map((a) => [a.type, true]));
       snapState.actions = d.actions.map((a) => ({ ...a, done: was.get(a.type) || false }));
       renderSnapActions();
+      // Already saved: the saved copy follows the correction.
+      if (snapState.saved) cloudApi("/cloud/memory/update", { id: snapState.saved, snap: snapState.result, tz: localTz() }).catch(() => {});
     } catch { /* the old buttons stay */ }
   }
   async function runSnapAction(a, btn) {
@@ -1420,7 +1478,7 @@
       sendChat(mode === "phone" ? a.data.prompt : `${a.data.prompt}\n\n(About a photo I took — ${snapLines(r)})`);
     }
   }
-  const KIND_SHORT = { bill: "BILL", receipt: "RCPT", event: "EVT", letter: "LTR", menu: "MENU", product: "ITEM", other: "PIC" };
+  const KIND_SHORT = { bill: "BILL", receipt: "RCPT", event: "EVT", letter: "LTR", document: "DOC", menu: "MENU", product: "ITEM", other: "PIC" };
   async function loadScans() {
     const box = $("snap-history");
     if (!box || !passValid()) return;
@@ -1433,7 +1491,7 @@
         const row = el("button", `scan-row${snapState && snapState.id === it.id ? " on" : ""}`);
         const t = el("span", "grow");
         const what = it.amount != null ? money(it.amount, it.currency) : it.date ? eventWhen(it.date) : it.summary;
-        t.append(el("span", "clamp1", it.title), el("span", "sub tiny clamp1", `${what || ""}${what ? " · " : ""}${ago(it.at)}`));
+        t.append(el("span", "clamp1", it.title), el("span", "sub tiny clamp1", `${what || ""}${what ? " · " : ""}${ago(it.at)}${it.saved ? " · saved" : ""}`));
         row.append(el("span", "scan-badge", KIND_SHORT[it.kind] || "PIC"), t);
         row.addEventListener("click", () => openScan(it.id));
         box.appendChild(row);
@@ -1444,7 +1502,7 @@
     try {
       const d = await cloudApi(`/cloud/snaps?id=${encodeURIComponent(id)}&tz=${encodeURIComponent(localTz())}`);
       if (snapState && snapState.url) URL.revokeObjectURL(snapState.url);
-      snapState = { id: d.id, at: d.at, result: d.snap, actions: d.actions, fromHistory: true };
+      snapState = { id: d.id, at: d.at, result: d.snap, actions: d.actions, fromHistory: true, saved: d.saved || null };
       renderSnap();
       document.querySelector("#v-snap .scroll").scrollTop = 0;
     } catch (e) { toast(cloudProblem(e), true); }
@@ -1469,6 +1527,268 @@
       }
     } catch { box.hidden = true; }
   }
+
+  // ---------- Saved: Echo's memory ----------
+  // What the user saved for Echo to remember: what a snap found (never the
+  // photo) or a note in their own words. Search works by meaning, and every
+  // date in a saved item becomes a reminder 7 days and 1 day before.
+  const GROUP_SHORT = { Bills: "BILL", Receipts: "RCPT", Events: "EVT", Documents: "DOC", Notes: "NOTE", Other: "PIC" };
+  const GROUP_ORDER = ["Bills", "Documents", "Receipts", "Events", "Notes", "Other"];
+  let mem = { items: [], upcoming: [], filter: "All", q: "", results: null, open: null, from: "home", dirty: false };
+  let memSearchTimer = 0, memLoaded = false;
+  const dayLabel = (ymd) => { const d = new Date(`${ymd}T12:00:00`); return isNaN(d) ? ymd : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }); };
+  const inDays = (n) => (n === 0 ? "today" : n === 1 ? "tomorrow" : `in ${n} days`);
+  function nextDate(item) {
+    const today = new Date().toLocaleDateString("en-CA");
+    return (item.dates || []).find((d) => d.date >= today) || null;
+  }
+  function openMemory({ id = null, from = null } = {}) {
+    if (!passValid()) return toast("Sign in once with your Mac online to use Saved.", true);
+    if (currentView !== "memory") mem.from = from || currentView;
+    mem.open = null;
+    show("memory");
+    renderMemory();
+    loadMemory().then(() => { if (id) openMemItem(id); });
+  }
+  $("mem-back").addEventListener("click", () => {
+    if (mem.open) { mem.open = null; renderMemory(); return; }
+    show(mem.from && mem.from !== "memory" ? mem.from : lastTab);
+    if (mem.from === "snap") renderSnap();
+  });
+  $("mem-new").addEventListener("click", () => openMemNote());
+  async function loadMemory() {
+    try {
+      const d = await cloudApi(`/cloud/memory?tz=${encodeURIComponent(localTz())}`);
+      mem.items = d.items || []; mem.upcoming = d.upcoming || [];
+      memLoaded = true;
+      if (!mem.open) renderMemory();
+    } catch (e) { toast(cloudProblem(e), true); }
+  }
+  function memRow(it, { score } = {}) {
+    const row = el("button", "scan-row");
+    const t = el("span", "grow");
+    const nd = nextDate(it);
+    const sub = nd ? `${nd.what} · ${dayLabel(nd.date)}` : it.summary || "";
+    t.append(el("span", "clamp1", it.title), el("span", "sub tiny clamp1", `${sub}${sub ? " · " : ""}saved ${ago(it.at)}`));
+    row.append(el("span", `scan-badge${it.group === "Notes" ? " note" : ""}`, GROUP_SHORT[it.group] || "PIC"), t);
+    if (score != null && score < 0.62) row.classList.add("weak");
+    row.addEventListener("click", () => openMemItem(it.id));
+    return row;
+  }
+  function renderMemory() {
+    const box = $("mem-body");
+    clear(box);
+    $("mem-h").textContent = mem.open ? (mem.open.item.group || "Saved") : "Saved";
+    $("mem-new").hidden = !!mem.open;
+    if (mem.open) return renderMemItem(box);
+    const field = el("div", "glass field");
+    const q = el("input"); q.type = "search"; q.placeholder = "Search what you saved"; q.value = mem.q; q.enterKeyHint = "search";
+    q.setAttribute("aria-label", "Search what you saved");
+    q.addEventListener("input", () => {
+      mem.q = q.value;
+      clearTimeout(memSearchTimer);
+      if (mem.q.trim().length < 2) { mem.results = null; renderMemList(); return; }
+      memSearchTimer = setTimeout(searchMemory, 450);
+    });
+    field.appendChild(q);
+    box.appendChild(field);
+    const list = el("div", "mem-list"); list.id = "mem-list";
+    box.appendChild(list);
+    renderMemList();
+  }
+  async function searchMemory() {
+    const q = mem.q.trim();
+    if (q.length < 2) return;
+    try {
+      const d = await cloudApi("/cloud/memory/search", { q });
+      if (mem.q.trim() !== q) return; // typed on since
+      mem.results = d.items || [];
+      renderMemList();
+    } catch (e) { toast(cloudProblem(e), true); }
+  }
+  function renderMemList() {
+    const list = $("mem-list");
+    if (!list) return;
+    clear(list);
+    if (mem.results) {
+      const c = el("section", "glass bcard");
+      c.appendChild(el("h3", "", mem.results.length ? "Best matches" : "No matches"));
+      if (!mem.results.length) c.appendChild(el("p", "sub small", "Nothing you saved matches that. Try other words."));
+      for (const it of mem.results) c.appendChild(memRow(it, { score: it.score }));
+      list.appendChild(c);
+      return;
+    }
+    if (!memLoaded) { const c = el("section", "glass bcard"); c.appendChild(el("p", "sub small", "Loading what you saved…")); list.appendChild(c); return; }
+    if (!mem.items.length) {
+      const c = el("section", "glass bcard");
+      c.append(el("p", "", "Nothing saved yet."), el("p", "sub small", "Snap a bill, letter, ticket or document and tap Save to memory, or tap + to write something down. Echo remembers it, finds it when you ask, and reminds you of its dates."));
+      const go = el("button", "cta big-btn", "Write something to remember"); go.addEventListener("click", () => openMemNote());
+      c.appendChild(go);
+      list.appendChild(c);
+      return;
+    }
+    if (mem.upcoming.length) {
+      const c = el("section", "glass bcard");
+      c.appendChild(el("h3", "", "Coming up"));
+      for (const u of mem.upcoming.slice(0, 5)) {
+        const row = el("button", "up-row");
+        row.append(el("span", "t", inDays(u.days)), el("span", "grow clamp1", `${u.what} · ${u.title}`));
+        row.addEventListener("click", () => openMemItem(u.item));
+        c.appendChild(row);
+      }
+      list.appendChild(c);
+    }
+    const groups = GROUP_ORDER.filter((g) => mem.items.some((x) => x.group === g));
+    if (groups.length > 1) {
+      const chips = el("div", "glass seg mem-seg"); chips.setAttribute("role", "tablist");
+      for (const g of ["All", ...groups]) {
+        const b = el("button", "", g); b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(mem.filter === g));
+        b.addEventListener("click", () => { mem.filter = g; renderMemList(); });
+        chips.appendChild(b);
+      }
+      list.appendChild(chips);
+    }
+    if (!groups.includes(mem.filter)) mem.filter = "All";
+    for (const g of groups.filter((x) => mem.filter === "All" || x === mem.filter)) {
+      const c = el("section", "glass bcard");
+      c.appendChild(el("h3", "", g));
+      for (const it of mem.items.filter((x) => x.group === g)) c.appendChild(memRow(it));
+      list.appendChild(c);
+    }
+    list.appendChild(el("p", "fine center", `${mem.items.length} saved · Echo finds them when you ask, in Phone mode`));
+  }
+  async function openMemItem(id) {
+    try {
+      const d = await cloudApi(`/cloud/memory?id=${encodeURIComponent(id)}`);
+      mem.open = { item: d.item, body: d.body || {} };
+      mem.dirty = false;
+      if (currentView !== "memory") { mem.from = currentView; show("memory"); }
+      renderMemory();
+      document.querySelector("#v-memory .scroll").scrollTop = 0;
+    } catch (e) { toast(cloudProblem(e), true); if (e.status === 404) loadMemory(); }
+  }
+  async function updateMemItem(patch, { quiet = false } = {}) {
+    const o = mem.open;
+    if (!o) return null;
+    try {
+      const d = await cloudApi("/cloud/memory/update", { id: o.item.id, tz: localTz(), ...patch });
+      o.item = d.item;
+      const i = mem.items.findIndex((x) => x.id === d.item.id);
+      if (i >= 0) mem.items[i] = d.item;
+      if (!quiet) toast("Saved");
+      loadMemory();
+      return d.item;
+    } catch (e) { toast(cloudProblem(e), true); return null; }
+  }
+  function renderMemItem(box) {
+    const { item, body } = mem.open;
+    const c = el("section", "glass bcard");
+    c.appendChild(el("span", "snap-kind", item.source === "note" ? "Note" : KIND[item.kind] || "Saved"));
+    const title = el("input", "mem-title"); title.value = item.title; title.maxLength = 80; title.setAttribute("aria-label", "Title");
+    c.appendChild(title);
+    let text = null;
+    if (item.source === "note") {
+      text = el("textarea", "glass ho-text"); text.value = body.text || item.summary; text.maxLength = 2000; text.setAttribute("aria-label", "What Echo remembers");
+      c.appendChild(text);
+    } else if (body.snap) {
+      if (item.summary) c.appendChild(el("p", "sub small", item.summary));
+      const fields = el("div", "snap-fields");
+      for (const [k, label] of [...(FIELDS[body.snap.kind] || []), ["account", "Account"]]) {
+        const v = body.snap[k];
+        if (v == null || v === "" || k === "currency") continue;
+        fields.append(el("label", "", label), el("span", "", k === "amount" || k === "price" ? money(v, body.snap.currency) : k === "account" ? `ends ${v}` : k === "eventStart" || k === "eventEnd" ? eventWhen(v) : v));
+      }
+      if (fields.childNodes.length) c.appendChild(fields);
+    }
+    const save = el("button", "cta big-btn", "Save changes"); save.hidden = true;
+    const dirty = () => { save.hidden = !(title.value.trim() && (title.value.trim() !== item.title || (text && text.value.trim() !== (body.text || "").trim()))); };
+    title.addEventListener("input", dirty);
+    if (text) text.addEventListener("input", dirty);
+    save.addEventListener("click", async () => {
+      save.setAttribute("aria-busy", "true");
+      const patch = { title: title.value.trim(), ...(text ? { text: text.value } : {}) };
+      const done = await updateMemItem(patch);
+      save.removeAttribute("aria-busy");
+      if (done) { if (text) mem.open.body.text = text.value.trim(); renderMemory(); }
+    });
+    c.appendChild(save);
+    box.appendChild(c);
+    if (body.snap && (body.snap.text || body.snap.translation)) {
+      box.appendChild(bcard(body.snap.translation ? `In English${body.snap.language ? `, from ${body.snap.language}` : ""}` : "What it says", el("p", "small pre", body.snap.translation || body.snap.text)));
+    }
+    // Dates, and their reminders.
+    const dc = el("section", "glass bcard");
+    dc.appendChild(el("h3", "", "Dates"));
+    if (!item.dates.length) dc.appendChild(el("p", "sub small", "No dates. Add one to be reminded before it."));
+    for (const d of item.dates) {
+      const row = el("div", "exp-row");
+      row.append(el("span", "t", dayLabel(d.date)), el("span", "grow", d.what));
+      const x = el("button", "", "✕"); x.setAttribute("aria-label", `Remove ${d.what}`);
+      x.addEventListener("click", async () => { if (await updateMemItem({ dates: item.dates.filter((y) => y !== d) }, { quiet: true })) renderMemory(); });
+      row.appendChild(x);
+      dc.appendChild(row);
+    }
+    const add = el("div", "mem-add");
+    const di = el("input"); di.type = "date"; di.setAttribute("aria-label", "Date");
+    const wi = el("input"); wi.placeholder = "What happens then"; wi.maxLength = 100; wi.setAttribute("aria-label", "What happens then");
+    const ab = el("button", "glass small-pill", "Add");
+    ab.addEventListener("click", async () => {
+      if (!di.value || !wi.value.trim()) return toast("Pick a date and say what happens then.", true);
+      if (await updateMemItem({ dates: [...item.dates, { date: di.value, what: wi.value.trim() }] }, { quiet: true })) { toast("Date added"); renderMemory(); }
+    });
+    add.append(di, wi, ab);
+    dc.appendChild(add);
+    const sw = el("button", "row mem-switch"); sw.setAttribute("role", "switch"); sw.setAttribute("aria-checked", String(item.remind !== false));
+    const swText = el("span", "grow"); swText.append(el("span", "", "Remind me"), el("span", "sub tiny", briefInfo && briefInfo.subscribed ? "7 days and 1 day before, at 9:00" : "Turn on Briefing and reminders in Settings to get them"));
+    const track = el("span", "track"); track.appendChild(el("span", "knob"));
+    sw.append(swText, track);
+    sw.addEventListener("click", async () => { if (await updateMemItem({ remind: item.remind === false }, { quiet: true })) renderMemory(); });
+    dc.appendChild(sw);
+    box.appendChild(dc);
+    const ask = el("button", "glass big-btn", "Ask Echo about it");
+    ask.addEventListener("click", () => {
+      if (body.snap) snapCtx = { snap: body.snap, until: Date.now() + 15 * 60_000 };
+      show("chat");
+      restoreInput(mode === "phone" ? `About "${item.title}" that I saved: ` : `About "${item.title}" that I saved (${item.summary}): `);
+      input.focus();
+    });
+    box.appendChild(ask);
+    const del = el("button", "text-btn center", "Delete from memory");
+    del.addEventListener("click", async () => {
+      if (!confirm(`Delete "${item.title}"? Echo will forget it and its reminders.`)) return;
+      try {
+        await cloudApi("/cloud/memory/delete", { id: item.id, tz: localTz() });
+        if (snapState && snapState.saved === item.id) snapState.saved = null;
+        mem.items = mem.items.filter((x) => x.id !== item.id);
+        mem.open = null; toast("Deleted"); renderMemory(); loadMemory();
+      } catch (e) { toast(cloudProblem(e), true); }
+    });
+    box.appendChild(del);
+    box.appendChild(el("p", "fine center", `Saved ${new Date(item.at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })} · ${item.source === "note" ? "your words" : "from a snap, without the photo"}${item.indexed ? "" : " · search by meaning comes shortly"}`));
+  }
+
+  // Writing something down for Echo: from + on Saved, or from a chat message.
+  function openMemNote(text = "") {
+    if (!passValid()) return toast("Sign in once with your Mac online to use Saved.", true);
+    $("mn-text").value = text; $("mn-date").value = ""; $("mn-what").value = "";
+    $("mn-save").disabled = !text.trim();
+    openSheet("sheet-memnote");
+    if (!text) setTimeout(() => $("mn-text").focus(), 250);
+  }
+  $("mn-text").addEventListener("input", () => { $("mn-save").disabled = !$("mn-text").value.trim(); });
+  $("mn-save").addEventListener("click", async () => {
+    const text = $("mn-text").value.trim(), date = $("mn-date").value, what = $("mn-what").value.trim();
+    if (!text) return;
+    if (what && !date) return toast("Pick the date too, or clear what happens then.", true);
+    const btn = $("mn-save"); btn.setAttribute("aria-busy", "true");
+    try {
+      const d = await cloudApi("/cloud/memory/save", { note: { text, dates: date ? [{ date, what: what || text.split("\n")[0].slice(0, 100) }] : [] }, tz: localTz() });
+      closeSheets();
+      toast(d.item.dates.length ? `Saved. Echo will remind you before ${dayLabel(d.item.dates[0].date)}.` : "Saved. Echo will remember it.");
+      if (currentView === "memory") loadMemory();
+    } catch (e) { toast(cloudProblem(e), true); }
+    finally { btn.removeAttribute("aria-busy"); }
+  });
 
   // ---------- Hand-off to the Mac ----------
   // A job left here while the Mac is away. Face ID approves its exact text (the
@@ -1694,6 +2014,16 @@
     else box.appendChild(bcard("Calendar", el("p", "sub small", "No calendar yet. Set up Settings → Calendar from this iPhone, or turn on your Mac.")));
     if (b.email && b.email.length) box.appendChild(bcard("Needs you", blist(b.email.map((m) => [null, `${m.from} — ${m.subject}`]))));
     if (b.reminders && b.reminders.length) box.appendChild(bcard("Reminders", blist(b.reminders.map((r) => [r.time, r.text]))));
+    if (b.comingUp && b.comingUp.length) {
+      const c = bcard("Coming up");
+      for (const u of b.comingUp) {
+        const row = el("button", "up-row");
+        row.append(el("span", "t", inDays(u.days)), el("span", "grow clamp1", `${u.what} · ${u.title}`));
+        row.addEventListener("click", () => openMemory({ id: u.item, from: "briefing" }));
+        c.appendChild(row);
+      }
+      box.appendChild(c);
+    }
     if (b.near) {
       const near = [...b.near.quakes.map((q) => [null, `Earthquake M${q.magnitude.toFixed(1)}, ${q.place}${q.tsunami ? " (tsunami flag)" : ""}`]), ...b.near.storms.map((st) => [null, `${st.title} (${st.type})`])];
       box.appendChild(bcard("Near you", near.length ? blist(near) : el("p", "sub small", "No earthquakes or storms within 500 km."), b.world ? el("p", "fine", `Elsewhere: ${b.world.zone.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase())} — ${b.world.headline}`) : null));
@@ -1705,7 +2035,9 @@
   function openFromUrl(url) {
     try {
       const v = new URL(url, location.origin).searchParams.get("view");
+      const q = new URL(url, location.origin).searchParams;
       if (v === "briefing") openBriefing(); else if (v === "chat") show("chat"); else if (v === "missions") show("missions");
+      else if (v === "memory") openMemory({ id: q.get("id"), from: TABS.includes(currentView) ? currentView : lastTab });
     } catch { /* not ours */ }
   }
   if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "open") openFromUrl(e.data.url); });

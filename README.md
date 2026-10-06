@@ -104,7 +104,7 @@ Notifications are encrypted end to end (Web Push, RFC 8291). The relay's notific
 
 ### Snap & act
 
-Tap **Snap** on Home (in Phone mode) or the camera in Chat. Take or choose a photo of a bill, receipt, ticket, letter, menu or price tag. Echo reads it in one request and shows what it found; you can correct any field. The buttons depend on what it is:
+Tap **Snap** on Home (in Phone mode) or the camera in Chat. Take or choose a photo of a bill, receipt, ticket, letter, document (an ID, insurance, warranty or contract), menu or price tag. Echo reads it in one request and shows what it found; you can correct any field. The buttons depend on what it is:
 
 | Photo | Buttons |
 | --- | --- |
@@ -112,6 +112,7 @@ Tap **Snap** on Home (in Phone mode) or the camera in Chat. Take or choose a pho
 | Receipt | Save as expense |
 | Event | Add to Calendar · Remind me the day before |
 | Letter | A reminder before its deadline · What do I need to do? · File it on my Mac |
+| Document | What should I know? |
 | Product | Find it cheaper |
 
 Foreign-language text comes with an English translation. Expenses add up by month on the Snap page.
@@ -122,6 +123,16 @@ How it's kept safe:
 - The photo is shrunk on the phone (which drops its location data), sent for that one read, and never stored.
 - The buttons are made from the checked fields, never from text in the photo.
 - Snap has its own daily cap: `PHONE_DAILY_SNAPS`, default 30.
+
+### Saved: Echo's memory
+
+**Save to memory** on any scan (new or from its history) keeps what Echo found, never the photo. **+** on the Saved page, or tapping a chat message and **Remember**, saves a note in your own words. In Phone mode, "remember that…" saves one too.
+
+- **Saved page** (Snap → Saved): everything grouped as Bills, Documents, Receipts, Events and Notes, with search. Open an item to rename it, edit a note, add or remove dates, mute its reminders, ask Echo about it, or delete it.
+- **Echo remembers:** in Phone mode Echo searches your saved items before saying it doesn't know something personal ("when does my car insurance renew?"). Search works by meaning, not exact words. Each item gets a vector from Gemini's embedding model (`gemini-embedding-001`, its own free quota; `GEMINI_EMBED_MODEL` changes it). Items saved while embedding is unavailable are found by their words, and get their vectors on a later search.
+- **Dates:** every date in a saved item (a due date, an expiry, a renewal, an appointment) is reminded 7 days and 1 day before, at 9:00 your time, by notification. The briefing gets a **Coming up** card for the next two weeks.
+
+Saved items are sealed with the relay's key like everything else in the store: an index (titles, dates, vectors) and each item's content under its own key. Up to 250 items per phone; the oldest go first.
 
 ### Hand-off to the Mac
 
