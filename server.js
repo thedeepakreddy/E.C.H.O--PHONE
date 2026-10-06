@@ -18,7 +18,7 @@
  * Node's standard library only, no dependencies.
  */
 import http from "node:http";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -339,14 +339,19 @@ async function defaultFetchJson(url) {
 // Started directly (Render runs `npm start`): listen. Imported by tests: don't.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const secret = String(process.env.RELAY_SECRET ?? "").trim();
-  // Not paired yet (RELAY_SECRET missing or short): stay up and say so, rather
-  // than crash-looping a fresh deploy. Nothing is forwarded until it is set.
-  const handler = secret.length >= 32 ? createRelay({ secret }).handler : (req, res) => {
-    const health = (req.url ?? "").split("?")[0] === "/healthz";
-    res.writeHead(health ? 200 : 503, { "content-type": health ? "application/json" : "text/plain; charset=utf-8", "cache-control": "no-store" });
-    res.end(health ? JSON.stringify({ ok: true, echo: "unpaired" }) : "Echo Remote isn't set up yet: add RELAY_SECRET (32+ characters) in Render's Environment settings.");
+  const paired = secret.length >= 32;
+  // Not paired yet (RELAY_SECRET missing or short): the app, World and weather
+  // still work, but no Mac can connect — with a key nobody holds — until it is set.
+  const relay = createRelay({ secret: paired ? secret : randomBytes(32).toString("hex") });
+  const handler = paired ? relay.handler : (req, res) => {
+    const path = (req.url ?? "").split("?")[0];
+    if (path === "/healthz" || path.startsWith("/agent/")) {
+      res.writeHead(path === "/healthz" ? 200 : 503, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(JSON.stringify(path === "/healthz" ? { ok: true, echo: "unpaired" } : { error: "RELAY_SECRET isn't set on the relay." }));
+    }
+    return relay.handler(req, res);
   };
-  if (secret.length < 32) console.error("RELAY_SECRET is missing or shorter than 32 characters: running unpaired.");
+  if (!paired) console.error("RELAY_SECRET is missing or shorter than 32 characters: running unpaired.");
   const server = http.createServer(handler);
   // Long polls outlive Node's default timeouts; keep the socket open for them.
   server.requestTimeout = 0;
