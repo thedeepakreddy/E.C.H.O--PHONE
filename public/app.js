@@ -536,30 +536,35 @@
     return buf;
   }
 
-  // Home "Listen": talk to Echo; the answer is read out on this phone.
+  // Home "Listen": talk to Echo; the answer is always read out on this phone.
+  // (Chat is the place for text: typed messages and voice notes get written replies.)
   let homeRec = null;
   $("act-listen").addEventListener("click", async () => {
-    unlockSpeech();
+    primeSpeech();
     const btn = $("act-listen");
     if (!homeRec) {
+      // Talking over Echo stops it, so the microphone doesn't hear its voice.
+      if (talking && window.speechSynthesis) { speechSynthesis.cancel(); talking = 1; speechEnd(); }
       try { homeRec = await capture(); btn.setAttribute("aria-pressed", "true"); toast("Listening… tap again to send"); }
       catch (e) { toast(e.message || "Allow the microphone to talk to Echo.", true); }
       return;
     }
     const wav = homeRec.stop(); homeRec = null; btn.setAttribute("aria-pressed", "false");
     if (wav.byteLength < 44 + 16000) return toast("Too short — tap, speak, then tap again.", true);
-    if (mode === "phone") return void sendCloudVoice(wav, { speak: speakHere });
+    if (mode === "phone") return void sendCloudVoice(wav, { speak: true });
     try { await api("/voice", { body: wav }); toast("Sent to Echo"); } catch { toast("Couldn't reach your Mac.", true); }
   });
 
   // ---------- replies read aloud on the phone ----------
-  let speakHere = store.get("echo_speak") !== "off", firstEvents = true, eventsNext = 0, speechReady = false;
-  function unlockSpeech() {
-    if (speechReady || !window.speechSynthesis) return;
-    speechReady = true;
-    try { speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch { /* fine */ }
+  // iPhone only lets a page speak once a tap has started speech, and the answer
+  // arrives seconds after the tap. So every Listen tap starts a silent sentence,
+  // which keeps the voice unlocked for the reply.
+  let firstEvents = true, eventsNext = 0;
+  function primeSpeech() {
+    if (!window.speechSynthesis) return;
+    try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch { /* fine */ }
   }
-  document.addEventListener("pointerdown", unlockSpeech, { once: true });
+  document.addEventListener("pointerdown", primeSpeech, { once: true });
   async function pollEvents() {
     const d = await api(`/events?since=${eventsNext}`);
     eventsNext = d.nextIndex || eventsNext;
@@ -567,7 +572,7 @@
       if (it.kind !== "reply" || firstEvents) continue;
       const text = String(it.line).replace(/^Echo:\s*/, "");
       if (mode === "mac") $("activity-line").textContent = text;
-      if (speakHere) say(text);
+      say(text); // replies to the Echo page's voice: spoken back
     }
     firstEvents = false;
   }
@@ -940,7 +945,6 @@
   let note = null, noteTimer = 0;
   async function startNote() {
     if (note) return;
-    unlockSpeech();
     try { note = await capture(); } catch (e) { return toast(e.message || "Allow the microphone to send voice notes.", true); }
     $("recording").hidden = false;
     noteTimer = setInterval(() => { const s = Math.floor((Date.now() - note.startedAt) / 1000); $("rec-time").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 250);
@@ -1182,12 +1186,6 @@
       rememberPasskeys([{ id: cred.id }]);
       sw.setAttribute("aria-checked", "true"); toast("Face ID is on");
     } catch (e) { if (e && e.name !== "NotAllowedError") toast(e.message || "Couldn't turn on Face ID.", true); }
-  });
-  $("sw-speak").setAttribute("aria-checked", String(speakHere));
-  $("sw-speak").addEventListener("click", () => {
-    speakHere = !speakHere; store.set("echo_speak", speakHere ? "on" : "off");
-    $("sw-speak").setAttribute("aria-checked", String(speakHere));
-    if (!speakHere && window.speechSynthesis) speechSynthesis.cancel();
   });
   document.querySelectorAll("[data-voice]").forEach((s) => s.addEventListener("click", async () => {
     const value = s.getAttribute("aria-checked") !== "true";
