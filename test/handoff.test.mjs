@@ -42,6 +42,10 @@ test("relay: leave a job, the Mac collects it, reports back, and the phone is no
     const left = await (await phone("/cloud/handoff", { task: task(1), assertion: ASSERTION })).json();
     assert.equal(left.item.status, "waiting");
     assert.equal((await phone("/cloud/handoff", { task: task(1), assertion: ASSERTION })).status, 400, "the same job can't be left twice");
+    const twin = { ...task(3), text: `  ${task(1).text.toUpperCase()} ` };
+    const dup = await phone("/cloud/handoff", { task: twin, assertion: ASSERTION });
+    assert.equal(dup.status, 400, "nor the same words as a job that's still waiting");
+    assert.match((await dup.json()).message, /already waiting for your Mac/);
     assert.equal((await fetch(`${base}/agent/handoff`)).status, 404, "only Echo can collect jobs");
     const poll = await mac("/agent/poll");
     assert.equal(poll.headers.get("x-relay-handoffs"), "1", "Echo hears a job is waiting on its next poll");

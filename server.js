@@ -782,6 +782,11 @@ export function createRelay({
         const assertion = checkAssertion(body.assertion);
         const item = await withHandoffs((st) => {
           if (st.items.some((i) => i.task.id === task.id)) throw Object.assign(new Error("That job is already waiting."), { input: true });
+          // The same job twice (a double tap, or asked again before the Mac was back) would run twice.
+          const same = (t) => t.trim().toLowerCase().replace(/\s+/g, " ");
+          if (st.items.some((i) => i.task.device === device && ["waiting", "started"].includes(i.status) && same(i.task.text) === same(task.text))) {
+            throw Object.assign(new Error("That job is already waiting for your Mac."), { input: true });
+          }
           if (st.items.filter((i) => i.status === "waiting").length >= MAX_WAITING) throw Object.assign(new Error(`${MAX_WAITING} jobs are already waiting for your Mac.`), { input: true });
           const it = { task, assertion, status: "waiting", summary: null, updatedAt: now() };
           st.items.push(it);
