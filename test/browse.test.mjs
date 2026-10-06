@@ -227,3 +227,25 @@ test("actions are checked: unknown ones, bad numbers and non-web addresses becom
   assert.match(c[0].parts[0].text, /part 1 of 2; read_more for the next/);
   assert.ok(c[0].parts[0].text.length < 15_000, "the page is clipped");
 });
+
+test("browse steps: when web search's own limit runs out, Echo browses on instead of failing", async () => {
+  const store = createStore({ key: deriveKeys(SECRET).store, now: () => NOW });
+  const { GeminiError } = await import("../lib/gemini.js");
+  const bodies = [];
+  const replies = [
+    { candidates: [{ content: { role: "model", parts: [{ functionCall: { id: "1", name: "web_search", args: { query: "kindle price" } } }] } }] },
+    new GeminiError("minute", "Quota exceeded for search", { retryMs: 40_000, quota: "GoogleSearchRequestsPerMinute" }),
+    { candidates: [{ content: { role: "model", parts: [{ functionCall: { id: "2", name: "search", args: { query: "kindle price" } } }] } }] },
+    { candidates: [{ content: { role: "model", parts: [{ functionCall: { id: "3", name: "done", args: { answer: "ok", success: true } } }] } }] },
+  ];
+  const gemini = { model: "m", generate: async (b) => { bodies.push(structuredClone(b)); const r = replies.shift(); if (r instanceof Error) throw r; return r; } };
+  const cloud = createCloud({ gemini, store, now: () => NOW, tools: {} });
+  const r = await cloud.browseStep({ task: "price of a kindle", page: {}, steps: [], notes: [] });
+  assert.deepEqual(r.action, { name: "search", args: { query: "kindle price" } });
+  assert.match(JSON.stringify(bodies[2].contents.at(-1)), /Web search isn't available right now/);
+  await cloud.browseStep({ task: "price of a kindle", page: {}, steps: [], notes: [] });
+  assert.equal(bodies[3].tools[0].functionDeclarations.some((d) => d.name === "web_search"), false, "not offered again for a while");
+  // The model's own per-minute limit still says how long to wait.
+  replies.push(new GeminiError("minute", "Quota exceeded", { retryMs: 33_000, quota: "GenerateRequestsPerMinute" }));
+  await assert.rejects(cloud.browseStep({ task: "x", page: {}, steps: [], notes: [] }), (e) => e.kind === "minute" && e.retryAfter === 33);
+});

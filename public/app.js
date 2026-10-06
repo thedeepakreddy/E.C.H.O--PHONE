@@ -2192,7 +2192,10 @@
       catch (e) {
         if (run.stopped || e.name === "AbortError" || attempt >= 3 || !RETRYABLE(e)) throw e;
         const limited = e.status === 429;
-        await countdown(run, limited ? 20 + attempt * 15 : 5, limited ? "Free tier: a few requests a minute" : "Echo couldn't be reached");
+        // Wait as long as Google says (when it says), a little more each time.
+        const told = Number(e.data && e.data.retryAfter);
+        const wait = limited ? Math.min(90, Math.max(5, Number.isFinite(told) && told > 0 ? told + 2 : 20) + attempt * 10) : 5;
+        await countdown(run, wait, limited ? "Free tier: a few requests a minute" : "Echo couldn't be reached");
       }
     }
   }

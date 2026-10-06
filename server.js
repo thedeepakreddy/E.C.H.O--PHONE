@@ -537,7 +537,7 @@ export function createRelay({
   }
   const CLOUD_STATUS = { setup: 503, cap: 429, quota: 429, minute: 429, busy: 429, input: 400, failed: 502 };
   function sendCloudError(res, e) {
-    if (e instanceof CloudError) return send(res, CLOUD_STATUS[e.kind] ?? 502, { error: e.kind, message: e.message, resetsAt: e.resetsAt ?? null });
+    if (e instanceof CloudError) return send(res, CLOUD_STATUS[e.kind] ?? 502, { error: e.kind, message: e.message, resetsAt: e.resetsAt ?? null, retryAfter: e.retryAfter ?? null });
     if (e?.status === 413) return send(res, 413, { error: "input", message: "That's too long to send." });
     if (e instanceof SyntaxError) return send(res, 400, { error: "input", message: "Bad request." });
     return send(res, 502, { error: "failed", message: "Phone mode had a problem. Try again." });
