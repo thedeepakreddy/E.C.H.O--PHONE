@@ -138,7 +138,7 @@ Saved items are sealed with the relay's key like everything else in the store: a
 
 The **Browser** tab is a web browser inside Echo Phone that you and Echo share. Settings moved to the Echo page, where the Brain button was; Brain is in Settings.
 
-- **You browse:** type an address or a search (DuckDuckGo). Back, forward, reload, and **⋯** for Open in Safari, Copy address, and Sign out of all websites.
+- **You browse:** type an address or a search (DuckDuckGo). Back, forward, reload, and **⋯** for Open the real page (Safari from a Home Screen app, a new tab in Chrome or Safari), Copy address, and Sign out of all websites.
 - **Hand it to Echo:** type what's left in **Ask Echo to do something here**, for example "finish this form, but stop before sending" or "compare these three laptops". Echo works in the same tab while you watch, one step at a time. **Take over** stops it at once. When it's done, the answer shows under the page and in Chat.
 - **Big jobs from Chat:** in Phone mode, ask for something that needs real browsing and Echo offers **Let Echo browse this**.
 - **How Echo browses** (browser-use's method): the phone turns the page into text with every link, button and field numbered. Echo picks one action (click, type, choose, open, search, go back, read further, ask you, or finish), the phone does it, and Echo sees the new page. It can also ask Google for a quick answer and keep notes across pages. Each step is one Gemini request. `PHONE_DAILY_BROWSE` caps steps per day (default 300), and a task stops after 30 steps.
@@ -147,11 +147,11 @@ How it's kept safe:
 - **Pages can't run anything.** The relay fetches each page and removes its scripts. Every link, form, image and stylesheet is rewritten to go back through the relay. The page is then served with a policy that forbids scripts, into a frame sandboxed without scripts. That is what lets the app read and click the page for Echo. Images, fonts and stylesheets are the only other files it will pass on.
 - **Public sites only.** The relay never fetches loopback, private-network or cloud-metadata addresses, whatever a page or redirect asks, and checks each address after looking it up.
 - **Your approval.** Echo stops for Go ahead / Don't before anything that pays, buys, books, sends, submits a form to a site, signs up, deletes or changes settings. No answer means no.
-- **No secrets typed by Echo.** Echo never types into password, card, security-code or ID fields; it asks you to. Bank and payment sign-ins aren't carried at all: use Safari for those.
+- **No secrets typed by Echo.** Echo never types into password, card, security-code or ID fields; it asks you to. Bank and payment sign-ins aren't carried at all: use your normal browser for those.
 - **Page text is information.** Whatever a page says, Echo doesn't take instructions from it.
 - **Sessions:** the sites you sign in to keep their cookies per phone, sealed in the store for 30 days. **Sign out of all websites** clears them. **Sign out every phone** also ends the Browser's own session.
 
-What doesn't work: sites that only run with their scripts (web apps, maps, many checkouts) show little or nothing. Use **⋯ → Open in Safari** for those. Searches come from the relay's server, so some sites may show it bot checks.
+What doesn't work: sites that only run with their scripts (web apps, maps, many checkouts) show little or nothing. Use **⋯ → Open the real page** for those. Searches come from the relay's server, so some sites may show it bot checks.
 
 ### Hand-off to the Mac
 

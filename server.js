@@ -876,10 +876,10 @@ export function createRelay({
       if (req.method !== "POST") return redirect(res, proxyPath("p", t.url));
       try { body = await readBody(req, 1024 * 1024); } catch { return sendPage(res, 413, notePage("That form is too big to send", "")); }
       method = "POST";
-      // Sign-ins to banks and payment services stay in Safari, where nothing sits in between.
+      // Sign-ins to banks and payment services stay in the phone's own browser, where nothing sits in between.
       const host = new URL(target).hostname;
       if (sensitiveHost(host) && /(^|&|name=")[^=&"]*(pass|pwd|pin|otp|cvv|cvc|card)[^=&"]*/i.test(body.toString("latin1").slice(0, 20000))) {
-        return sendPage(res, 200, notePage("Sign in to this one in Safari", `Echo's Browser doesn't carry sign-ins to banks and payment services like ${host}. Tap ⋯ → Open in Safari.`, target));
+        return sendPage(res, 200, notePage("Sign in to this one outside Echo", `Echo's Browser doesn't carry sign-ins to banks and payment services like ${host}. Tap ⋯ → Open the real page.`, target));
       }
     }
     if (!checkUrl(target)) return sendPage(res, 400, notePage("That address can't be opened", ""));
@@ -935,7 +935,7 @@ export function createRelay({
       return sendPage(res, 200, `<!doctype html><meta charset="utf-8"><meta name="echo-url" content="${target.replace(/"/g, "&quot;")}"><meta name="viewport" content="width=device-width, initial-scale=1"><pre style="white-space:pre-wrap;font:14px/1.45 ui-monospace,Menlo,monospace;padding:14px;margin:0">${text}</pre>`);
     }
     if (/^image\//.test(type)) return sendPage(res, 200, `<!doctype html><meta charset="utf-8"><meta name="echo-url" content="${target.replace(/"/g, "&quot;")}"><meta name="viewport" content="width=device-width, initial-scale=1"><body style="margin:0;background:#111;display:grid;place-items:center;min-height:100vh"><img src="${proxyPath("r", target)}" style="max-width:100%;height:auto" alt=""></body>`);
-    return sendPage(res, 200, notePage("This file can't open here", `It's ${type.split(";")[0] || "a file"} Echo's Browser can't show. Tap ⋯ → Open in Safari to get it.`, target));
+    return sendPage(res, 200, notePage("This file can't open here", `It's ${type.split(";")[0] || "a file"} Echo's Browser can't show. Tap ⋯ → Open the real page to get it.`, target));
   }
 
   /** The iPhone's Shortcut posts today's events here each morning (see Settings → Calendar from this iPhone). */

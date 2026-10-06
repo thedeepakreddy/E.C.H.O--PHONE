@@ -1856,7 +1856,7 @@
       }
       box.appendChild(list);
     }
-    box.appendChild(el("p", "sub tiny br-note", "Pages open without their scripts, so app-like sites may not work: ⋯ → Open in Safari for those. Bank and payment sign-ins stay in Safari."));
+    box.appendChild(el("p", "sub tiny br-note", "Pages open without their scripts, so app-like sites may not work: ⋯ → Open the real page for those. Sign in to banks and payment sites in your normal browser."));
   }
   function remember(url, title) {
     let recent = [];
@@ -1865,7 +1865,7 @@
     store.set(RECENT_KEY, JSON.stringify(recent));
   }
   let stallTimer = 0;
-  /** Loading: the bar runs; a page that hasn't come after 25 s says so, with Retry and Open in Safari. */
+  /** Loading: the bar runs; a page that hasn't come after 25 s says so, with Retry and Open the real page. */
   function setLoading(on) {
     br.loading = on;
     $("br-progress").classList.toggle("on", on);
@@ -1880,8 +1880,8 @@
     const row = el("div", "btns2");
     const retry = el("button", "cta big-btn", "Retry");
     retry.addEventListener("click", () => { box.remove(); if (br.pending) loadPath(br.pending); else if (br.url) loadPath(pagePath(br.url), "reload"); });
-    const safari = el("button", "glass big-btn", "Open in Safari");
-    safari.addEventListener("click", () => { const u = br.pendingUrl || br.url; if (u) location.href = standalone ? `x-safari-${u}` : u; });
+    const safari = el("button", "glass big-btn", "Open the real page");
+    safari.addEventListener("click", () => openReal(br.pendingUrl || br.url));
     row.append(safari, retry);
     box.appendChild(row);
     $("br-stage").appendChild(box);
@@ -1952,11 +1952,17 @@
   $("br-fwd").addEventListener("click", () => { if (br.fwd.length) loadPath(pagePath(br.fwd.pop()), "fwd"); });
   $("br-reload").addEventListener("click", () => { if (br.url) loadPath(pagePath(br.url), "reload"); });
   $("br-more").addEventListener("click", () => openSheet("sheet-bmore"));
-  $("bm-safari").addEventListener("click", () => {
-    closeSheets();
-    if (!br.url) return toast("Open a page first.");
-    location.href = standalone ? `x-safari-${br.url}` : br.url;
-  });
+  /** The real page, scripts and all: Safari from a Home Screen app, a new tab in a browser (Chrome or Safari). */
+  function openReal(url) {
+    if (!url) return toast("Open a page first.");
+    if (standalone) location.href = `x-safari-${url}`;
+    else {
+      // (With "noopener" the browser reports no window even when it opened one, so cut the link by hand.)
+      const w = window.open(url, "_blank");
+      if (w) w.opener = null; else location.href = url;
+    }
+  }
+  $("bm-safari").addEventListener("click", () => { closeSheets(); openReal(br.url); });
   $("bm-copy").addEventListener("click", async () => { closeSheets(); try { await navigator.clipboard.writeText(br.url); toast("Copied"); } catch { toast("Couldn't copy.", true); } });
   $("bm-start").addEventListener("click", () => { closeSheets(); br.url = ""; brFrame.hidden = true; brFrame.contentWindow && brFrame.contentWindow.location.replace("about:blank"); renderBrowserBar(); renderStart(); });
   async function clearSites() {
