@@ -293,7 +293,11 @@
     assembleAt: performance.now(),
     /* where the head is looking, and where it wants to look: -1..1 on each
        axis, measured from the centre of the stage */
-    gazeX: 0, gazeY: 0, wantX: 0, wantY: 0
+    gazeX: 0, gazeY: 0, wantX: 0, wantY: 0,
+    /* Speaking on the phone: the figure bursts apart (ex 0 → 1), some of its
+       particles spell the first words (ws 0 → 1, at `words` in figure units),
+       and it gathers back together afterwards (ex → 0). */
+    ex: 0, exTarget: 0, ws: 0, wsTarget: 0, words: null, wordsN: 0
   };
 
   var root = document.documentElement;
@@ -332,6 +336,13 @@
 
     /* Follow the pointer with a little lag — snapping to it reads as a
        texture being dragged, not as something choosing to look. */
+    /* Out in under a second; back together at the pace of the opening. */
+    var exRate = shared.exTarget > shared.ex ? dt / 900 : dt / 2100;
+    shared.ex = shared.exTarget > shared.ex ? Math.min(shared.exTarget, shared.ex + exRate) : Math.max(shared.exTarget, shared.ex - exRate);
+    var wsRate = dt / 700;
+    shared.ws = shared.wsTarget > shared.ws ? Math.min(shared.wsTarget, shared.ws + wsRate) : Math.max(shared.wsTarget, shared.ws - wsRate);
+    if (shared.ws === 0 && shared.wsTarget === 0) { shared.words = null; shared.wordsN = 0; }
+
     var ease = Math.min(1, dt * 0.005);
     shared.gazeX += (shared.wantX - shared.gazeX) * ease;
     shared.gazeY += (shared.wantY - shared.gazeY) * ease;
@@ -396,6 +407,7 @@
       return { rim: [168, 244, 255], deep: [38, 162, 216], core: [255, 126, 24], hot: [255, 232, 168] };
     }
 
+    var n0 = CLOUD.n;
     function draw(now) {
       if (!W || !H) return;
       var t = now * 0.001;
@@ -417,6 +429,14 @@
       else if (status === "asleep") { coreAmp = 0.16; coreR = 0.6; wobble = 0.12; sparkRate = 0.15; dim = 0.42; }
       else { coreAmp = 0.42; coreR = 0.8; wobble = 0.34; sparkRate = 0.55; dim = 0.9; }
       coreAmp *= assemble; dim *= 0.35 + 0.65 * assemble;
+      /* Burst: the glass, veins and sparks belong to the figure, so they go
+         with it; the scattered field stays bright. */
+      var ex = reduceMotion ? 0 : shared.ex;
+      var exE = ex * ex * (3 - 2 * ex);
+      var ws = shared.ws * shared.ws * (3 - 2 * shared.ws);
+      var words = shared.words, wordsN = shared.wordsN;
+      var perWord = words ? Math.max(1, Math.floor(n0 / stride / Math.max(1, wordsN))) : 0;
+      coreAmp *= 1 - exE;
 
       var breath = 1 + Math.sin(t * 0.78) * 0.006;
       var speakAmp = status === "speaking" ? level : 0;
@@ -426,7 +446,7 @@
 
       /* ---- particle buffer ---- */
       data.fill(0);
-      var n = CLOUD.n, cx = CLOUD.x, cy = CLOUD.y, cu = CLOUD.u, cp = CLOUD.part,
+      var n = n0, cx = CLOUD.x, cy = CLOUD.y, cu = CLOUD.u, cp = CLOUD.part,
           cph = CLOUD.ph, csx = CLOUD.sx, csy = CLOUD.sy, cst = CLOUD.st, cdz = CLOUD.dz, csd = CLOUD.sd, csm = CLOUD.sm;
 
       var yaw = shared.gazeX * 0.52, pitch = shared.gazeY * 0.30;
@@ -500,6 +520,30 @@
           ax = lerp(csx[i], px, e); ay = lerp(csy[i], py, e);
         }
 
+        /* Burst: each point flies out to its own place in a loose cloud around
+           the figure (staggered like the opening), drifting while it hangs
+           there; the points chosen to spell take their place in the words. */
+        var wordPt = false;
+        if (exE > 0.001) {
+          var bx = csx[i] * 0.34 + fsin(t * 0.37 + ph) * 0.05;
+          var by = csy[i] * 0.34 + 0.12 + fsin(t * 0.29 + ph * 1.7) * 0.05;
+          if (words && ws > 0.001) {
+            var q = (i / stride) | 0;
+            if (q % perWord === 0) {
+              var j = (q / perWord) | 0;
+              if (j < wordsN) {
+                var wl = clamp((ws - cst[i] * 0.3) / 0.7, 0, 1);
+                bx = lerp(bx, words[j * 2] + fsin(t * 2.1 + ph) * 0.004, wl);
+                by = lerp(by, words[j * 2 + 1] + fsin(t * 1.7 + ph) * 0.004, wl);
+                wordPt = wl > 0.5;
+              }
+            }
+          }
+          var le = clamp((exE - cst[i] * 0.35) / 0.65, 0, 1);
+          le = 1 - Math.pow(1 - le, 3);
+          ax = lerp(ax, bx, le); ay = lerp(ay, by, le);
+        }
+
         var sxp = FIG_OX + ax * FIG_U;
         var syp = FIG_OY + ay * FIG_U;
 
@@ -545,7 +589,11 @@
         }
 
         /* fade the bottom crop */
-        if (py > 1.30) a *= clamp((1.62 - py) / 0.32, 0, 1);
+        if (py > 1.30) a *= clamp((1.62 - py) / 0.32, 1 - exE, 1);
+        if (exE > 0.001) {
+          if (wordPt) { a = Math.max(a, 0.95) * 1.25; r = lerp(r, 230, 0.6); g = lerp(g, 252, 0.6); b = lerp(b, 255, 0.6); }
+          else a *= 1 - 0.38 * exE * (words ? ws : 0.4);
+        }
 
         if (a > 0.01) {
           splat(data, FIG_W, FIG_H, sxp, syp, r, g, b, a);
@@ -562,7 +610,7 @@
             var vp = pts[k];
             var travel = (t * 0.55 + vein.phase + k / pts.length) % 1;
             var pulse = Math.pow(1 - Math.abs(((k / pts.length) - travel + 1) % 1 - 0.0) , 8);
-            var vb = (0.22 + 0.78 * pulse) * coreAmp * assemble * (0.6 + level * 0.9);
+            var vb = (0.22 + 0.78 * pulse) * coreAmp * assemble * (0.6 + level * 0.9) * (1 - exE);
             var vy2 = vp[1] * breath;
             if (vy2 > 1.30) vb *= clamp((1.58 - vy2) / 0.3, 0, 1);
             splat(data, FIG_W, FIG_H, FIG_OX + vp[0] * breath * FIG_U, FIG_OY + vy2 * FIG_U,
@@ -585,7 +633,7 @@
         var out = sp.life * 0.26 * sp.lat;
         var sxs = (0.385 + out) * fsin(sp.a) + sp.vx * sp.life;
         var sys = -(0.53 + out) * fsin(sp.a + 1.5708) - sp.life * 0.06;
-        var sa = Math.pow(1 - sp.life, 1.6) * (0.55 + sp.seed * 0.85) * dim * assemble;
+        var sa = Math.pow(1 - sp.life, 1.6) * (0.55 + sp.seed * 0.85) * dim * assemble * (1 - exE);
         var fx = FIG_OX + sxs * FIG_U, fy = FIG_OY + sys * FIG_U;
         splat(data, FIG_W, FIG_H, fx, fy, tint.rim[0], tint.rim[1], tint.rim[2], sa);
         if (sp.big) {
@@ -618,7 +666,7 @@
       else if (status === "idle") ring = { n: 3, speed: 0.10, inward: false, a: 0.12 };
       else if (status === "error") ring = { n: 2, speed: 0.07, inward: false, a: 0.11 };
 
-      if (!reduceMotion && ring && assemble > 0.8) {
+      if (!reduceMotion && ring && assemble > 0.8 && exE < 0.05) {
         var S = 0.5, rw2 = ringEl.width, rh2 = ringEl.height;
         ringCtx.setTransform(1, 0, 0, 1, 0, 0);
         ringCtx.clearRect(0, 0, rw2, rh2);
@@ -777,10 +825,58 @@
   window.addEventListener("mousemove", function (e) { look(e.clientX, e.clientY); }, { passive: true });
   document.addEventListener("mouseleave", front);
 
+  /* Words as points in figure units: drawn on a scratch canvas over the
+     head's area (one or two lines, as large as fits) and sampled on a grid. */
+  function wordPoints(text) {
+    var PX = 400, X0 = -0.86, X1 = 0.86, Y0 = -0.62, Y1 = 0.42;
+    var c = document.createElement("canvas");
+    c.width = Math.round((X1 - X0) * PX); c.height = Math.round((Y1 - Y0) * PX);
+    var g = c.getContext("2d");
+    var font = function (sz) { return "800 " + sz + "px -apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"; };
+    var fit = function (lines) {
+      for (var sz = 170; sz >= 56; sz -= 6) {
+        g.font = font(sz);
+        var ok = sz * 1.1 * lines.length <= c.height * 0.92;
+        for (var k = 0; ok && k < lines.length; k++) ok = g.measureText(lines[k]).width <= c.width * 0.94;
+        if (ok) return sz;
+      }
+      return 0;
+    };
+    var words = String(text).trim().split(/\s+/).slice(0, 4);
+    var lines = [words.join(" ")];
+    var size = fit(lines);
+    if (!size && words.length > 1) {
+      var mid = Math.ceil(words.length / 2);
+      lines = [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
+      size = fit(lines);
+    }
+    if (!size) { lines = [words[0].slice(0, 12)]; size = fit(lines) || 56; }
+    g.font = font(size);
+    g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = "#fff";
+    for (var li = 0; li < lines.length; li++) g.fillText(lines[li], c.width / 2, c.height / 2 + (li - (lines.length - 1) / 2) * size * 1.08);
+    var img = g.getImageData(0, 0, c.width, c.height).data;
+    var step = Math.max(3, Math.round(size / 26)), pts = [];
+    for (var y = 0; y < c.height; y += step) {
+      for (var x = 0; x < c.width; x += step) {
+        if (img[(y * c.width + x) * 4 + 3] > 140) pts.push(X0 + x / PX, Y0 + y / PX);
+      }
+    }
+    return Float32Array.from(pts);
+  }
+
   var bootAt = performance.now();
   window.echoCore = {
     /* Play the assembly again: the particles gather into the figure. */
-    replay: function () { if (!reduceMotion) shared.assembleAt = performance.now(); front(); stage.resize(); }
+    replay: function () { if (!reduceMotion) shared.assembleAt = performance.now(); front(); stage.resize(); },
+    /* Burst apart while Echo speaks on the phone; false gathers it back. */
+    burst: function (on) { shared.exTarget = on ? 1 : 0; if (!on) shared.wsTarget = 0; },
+    /* Spell a few words with the burst's particles; null lets them go. */
+    spell: function (text) {
+      if (!text) { shared.wsTarget = 0; return; }
+      var pts = wordPoints(text);
+      if (!pts.length) return;
+      shared.words = pts; shared.wordsN = pts.length / 2; shared.ws = 0; shared.wsTarget = 1;
+    }
   };
   updateLevel(bootAt, 16);
   stage.draw(bootAt);

@@ -493,6 +493,7 @@
   // ---------- home actions ----------
   $("act-stop").addEventListener("click", async () => {
     if (window.speechSynthesis) speechSynthesis.cancel();
+    if (talking) { talking = 1; speechEnd(); }
     if (cloudBusy) { cloudAbort?.abort(); setCloudBusy(false); toast("Stopped"); }
     if (!(S && macOnline)) return;
     try { await api("/stop", { json: {} }); if (mode === "mac") toast("Stopped"); } catch { toast("Couldn't reach your Mac.", true); }
@@ -575,7 +576,72 @@
     const ut = new SpeechSynthesisUtterance(text);
     const voices = speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang));
     ut.voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices[0] || null;
+    let ended = false;
+    const done = () => { if (!ended) { ended = true; speechEnd(); } };
+    ut.onboundary = (e) => { if (Number.isFinite(e.charIndex)) speechWord(e.charIndex); };
+    ut.onend = done;
+    ut.onerror = done;
+    speechStart(text);
     speechSynthesis.speak(ut);
+  }
+
+  // ---------- Echo speaking on the phone: the figure bursts, the words show ----------
+  // While a reply is read aloud here, the humanoid bursts apart. Its particles
+  // spell the first few words, then the words follow the voice as captions;
+  // 4.5 s after it stops, the figure gathers back together.
+  const caption = $("speech-caption");
+  let talking = 0, settleTimer = 0, capTimer = 0, capText = "", capAt = 0, capHeard = false;
+  function firstWords(text) {
+    const words = String(text).replace(/\s+/g, " ").trim().split(" ");
+    const out = [];
+    for (const w of words) {
+      if (out.length >= 3 || (out.join(" ") + " " + w).trim().length > 18) break;
+      out.push(w.replace(/[.,!?;:"“”]+$/g, ""));
+      if (/[.!?]$/.test(w)) break;
+    }
+    return out.join(" ") || words[0].slice(0, 12);
+  }
+  function renderCaption(upTo) {
+    const text = capText;
+    const at = Math.min(text.length, Math.max(0, upTo));
+    const sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
+    let start = 0, cur = sentences[sentences.length - 1];
+    for (const sn of sentences) { if (start + sn.length > at) { cur = sn; break; } start += sn.length; }
+    const rel = Math.min(cur.length, Math.max(0, at - start));
+    const cut = rel + ((/^\S*/.exec(cur.slice(rel)) || [""])[0].length);
+    clear(caption);
+    const line = el("p", "cap-line");
+    line.append(el("span", "said", cur.slice(0, cut)), document.createTextNode(cur.slice(cut)));
+    caption.appendChild(line);
+  }
+  function speechStart(text) {
+    talking++;
+    clearTimeout(settleTimer);
+    const core = window.echoCore;
+    if (core) {
+      core.burst(true);
+      setTimeout(() => core.spell(firstWords(text)), 350);
+      setTimeout(() => core.spell(null), 2600);
+    }
+    capText = String(text); capAt = Date.now(); capHeard = false;
+    renderCaption(0);
+    clearInterval(capTimer);
+    // Without word timing from the voice, follow it at a speaking pace.
+    capTimer = setInterval(() => { if (!capHeard) renderCaption(Math.floor(((Date.now() - capAt) / 1000) * 15)); }, 250);
+    setTimeout(() => { if (talking || settleTimer) caption.classList.add("on"); }, 1400);
+  }
+  function speechWord(i) { capHeard = true; renderCaption(i); }
+  function speechEnd() {
+    talking = Math.max(0, talking - 1);
+    if (talking) return;
+    clearInterval(capTimer);
+    renderCaption(capText.length);
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      settleTimer = 0;
+      caption.classList.remove("on");
+      if (window.echoCore) window.echoCore.burst(false);
+    }, 4500);
   }
 
   // ---------- chat ----------
