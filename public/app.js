@@ -589,7 +589,9 @@
       if (mode === "mac") $("activity-line").textContent = text;
       // Spoken only when it answers this phone's own Listen, and the app is open;
       // replies to anything else (the Mac's microphone, typed chat) stay silent.
-      if (voiceAskedAt && Date.now() - voiceAskedAt < VOICE_REPLY_MS && !document.hidden) say(text);
+      // And only a reply Echo wrote after the question (an older one is never the answer).
+      const fresh = !Number.isFinite(it.at) || it.at >= voiceAskedAt - 5000;
+      if (voiceAskedAt && fresh && Date.now() - voiceAskedAt < VOICE_REPLY_MS && !document.hidden) say(text);
     }
     firstEvents = false;
   }
