@@ -455,3 +455,14 @@ body:not([data-mode="phone"]) .phone-only, body[data-mode="phone"] .mac-only { d
 .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ho-x { color: var(--sub); font-size: 16px; padding: 0 2px 0 6px; }
 .empty-line { padding: 10px 16px 14px; }
+
+/* ---------- Scan history and the iPhone calendar ---------- */
+.scroll-sheet { max-height: calc(var(--app-h, 100%) - var(--safe-top) - 24px); overflow-y: auto; overscroll-behavior: contain; }
+.pc-steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.45; color: var(--text); }
+.pc-steps b { font-weight: 600; }
+.scan-row { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; color: var(--text); padding: 10px 0; border-top: 1px solid rgba(255, 255, 255, .08); }
+.scan-row:first-of-type { border-top: 0; }
+.scan-row .grow > * { display: block; }
+.scan-row.on { color: var(--cyan); }
+.scan-badge { flex: none; width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--amber); box-shadow: inset 0 0 0 1px rgba(255, 179, 92, .5); }
+.text-btn { color: var(--sub); font-size: 14px; padding: 6px 0; align-self: flex-start; }

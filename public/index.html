@@ -200,6 +200,7 @@
       <button class="row" role="switch" aria-checked="false" id="sw-brief"><span class="grow">Briefing and reminders</span><span class="track"><span class="knob"></span></span></button>
       <div class="row"><label for="brief-time" class="grow">Time</label><input type="time" id="brief-time" value="07:00" class="row-select"></div>
       <div class="row"><label for="brief-days" class="grow">Days</label><select id="brief-days" class="row-select"><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option></select></div>
+      <button class="row" id="phonecal-open"><span class="grow">Calendar from this iPhone</span><span class="sub small" id="phonecal-state">Set up</span><span class="chev" aria-hidden="true"></span></button>
       <button class="row" id="brief-open"><span class="grow">Open today's briefing</span><span class="chev" aria-hidden="true"></span></button>
       <button class="row" id="push-test"><span class="grow">Send a test notification</span></button>
     </div>
@@ -333,6 +334,25 @@
   <p class="sub small">Your Mac does it the next time Echo is on. Face ID approves exactly this text, and your Mac checks that before it runs anything.</p>
   <button class="cta big-btn" id="ho-approve" disabled>Approve with Face ID</button>
   <button class="glass big-btn" data-close>Cancel</button>
+</section>
+<section class="glass sheet scroll-sheet" id="sheet-phonecal" role="dialog" aria-modal="true" aria-labelledby="pc-title" hidden>
+  <span class="grabber" aria-hidden="true"></span>
+  <h2 id="pc-title">Calendar from this iPhone</h2>
+  <p class="sub small" id="pc-status">Loading…</p>
+  <p class="small">A web app can't read your calendar, so a Shortcut sends today's events to Echo each morning, before your briefing. Set it up once:</p>
+  <ol class="pc-steps">
+    <li>Tap <b>Copy your link</b> below.</li>
+    <li>Open <b>Shortcuts</b> → <b>Automation</b> → <b>+</b> → <b>Time of Day</b>. Choose <b>6:45</b>, <b>Daily</b> and <b>Run Immediately</b>, then <b>Next</b> → <b>New Blank Automation</b>.</li>
+    <li>Add <b>Find Calendar Events</b>. Tap <b>Add Filter</b> and set it to <b>Start Date</b> · <b>is today</b>. Set <b>Sort by</b> to <b>Start Date</b>.</li>
+    <li>Add <b>Repeat with Each</b>.</li>
+    <li>Inside the repeat, add <b>Text</b>. Insert <b>Repeat Item</b>, tap it, choose <b>Start Date</b>, set the format to <b>ISO 8601</b> and turn on <b>Include Time</b>. Type <b>&nbsp;|&nbsp;</b> then insert <b>Repeat Item</b> again and choose <b>Title</b>.</li>
+    <li>After <b>End Repeat</b>, add <b>Combine Text</b>: <b>Repeat Results</b> with <b>New Lines</b>.</li>
+    <li>Add <b>Get Contents of URL</b>. Paste your link, tap <b>Show More</b>, set <b>Method</b> to <b>POST</b> and <b>Request Body</b> to <b>File</b>, and pick <b>Combined Text</b>.</li>
+    <li>Tap <b>Done</b>. To try it now, tap ▶ in the automation; this screen then shows how many events Echo got.</li>
+  </ol>
+  <button class="cta big-btn" id="pc-copy">Copy your link</button>
+  <button class="glass big-btn" id="pc-reset">Make a new link</button>
+  <button class="glass big-btn" data-close>Done</button>
 </section>
 <section class="glass sheet" id="sheet-power" role="dialog" aria-modal="true" aria-labelledby="po-title" hidden>
   <span class="grabber" aria-hidden="true"></span>

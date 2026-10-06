@@ -39,7 +39,7 @@ import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
 import { ensureSchedule } from "./lib/tick.js";
 import { vapidKeys, sendPush, validSubscription } from "./lib/push.js";
-import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick, localParts, validTz } from "./lib/briefing.js";
+import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick, localParts, validTz, parsePhoneCalendar } from "./lib/briefing.js";
 import { MAX_IMAGE_B64, cleanExpense, monthTotals, recheckSnap, snapActions } from "./lib/snap.js";
 import { MAX_WAITING, FINAL, checkTask, checkAssertion, forPhone, tidy, notificationFor } from "./lib/handoff.js";
 
@@ -77,6 +77,7 @@ export const CLOUD_RATE = 30;
 export const CLOUD_BODY = 256 * 1024;
 export const CLOUD_VOICE_BODY = 4 * 1024 * 1024;
 export const MAX_EXPENSES = 500;
+export const MAX_SNAPS = 100;
 /** How long a calendar link from Phone mode keeps working. */
 export const ICS_TTL_MS = 30 * 86400_000;
 
@@ -171,6 +172,7 @@ export function createRelay({
       phones, now: now(), tools: briefingTools, macOnline: online(), push,
       digest: () => store.get("digest").catch(() => null),
       storeBriefing: (id, b) => store.set(`brief:${id}`, b, 3 * 86400),
+      phoneCalendar: (id) => store.get(`cal:${id}`).catch(() => null),
     })).catch(() => false).finally(() => { ticking = null; });
     return ticking;
   }
@@ -189,6 +191,31 @@ export function createRelay({
     return run;
   }
   void withHandoffs(() => {}, { save: false }).catch(() => {}); // learn how many are waiting
+  /** Read-change-write of one sealed store key, one change at a time. */
+  const keyLocks = new Map();
+  function withKey(key, empty, fn, { save = true, ttl } = {}) {
+    const prev = keyLocks.get(key) ?? Promise.resolve();
+    const run = prev.then(async () => {
+      const value = (await store.get(key)) ?? empty();
+      const result = await fn(value);
+      if (save) await store.set(key, value, ttl);
+      return result;
+    });
+    const tail = run.catch(() => {});
+    keyLocks.set(key, tail);
+    tail.then(() => { if (keyLocks.get(key) === tail) keyLocks.delete(key); });
+    return run;
+  }
+  /** Scan history per phone: what each snap found (never the photo), kept apart from the tick's data. */
+  const withSnaps = (device, fn, opts) => withKey(`snaps:${device}`, () => ({ items: [] }), fn, opts);
+  const snapSummary = (e) => ({ id: e.id, at: e.at, kind: e.snap.kind, title: e.snap.title, summary: e.snap.summary,
+    amount: e.snap.amount, currency: e.snap.currency, date: e.snap.dueDate ?? e.snap.purchaseDate ?? e.snap.eventStart ?? null, done: e.done ?? {} });
+  function withLinks(actions) {
+    for (const a of actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
+    return actions;
+  }
+  /** The address the iPhone's Shortcut posts today's events to; the key in it only lets it do that. */
+  const calendarUrl = (key) => `${publicUrl.replace(/\/+$/, "")}/cal/${key}`;
   const cloudHits = new Map();
   /**
    * A calendar link that needs no storage: the event is sealed into the address
@@ -483,6 +510,21 @@ export function createRelay({
         const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
         return send(res, 200, { prefs: dev.prefs, subscribed: Boolean(dev.sub), latest: await store.get(`brief:${device}`).catch(() => null) });
       }
+      if (path === "/cloud/snaps") {
+        const id = new URL(req.url, "http://x").searchParams.get("id");
+        const items = await withSnaps(device, (st) => st.items, { save: false });
+        if (!id) return send(res, 200, { items: items.slice().reverse().map(snapSummary) });
+        const e = items.find((x) => x.id === id);
+        if (!e) return send(res, 404, { error: "input", message: "That scan was deleted." });
+        const tz = validTz(new URL(req.url, "http://x").searchParams.get("tz")) ? new URL(req.url, "http://x").searchParams.get("tz") : "UTC";
+        const actions = withLinks(snapActions(e.snap, { today: localParts(now(), tz).date })).map((a) => ({ ...a, done: Boolean(e.done?.[a.type] && (a.type === "expense" || a.type === "reminder")) }));
+        return send(res, 200, { id: e.id, at: e.at, snap: e.snap, actions });
+      }
+      if (path === "/cloud/calendar") {
+        const key = await withPhones((phones) => { const d = deviceOf(phones, device); d.calKey ??= randomBytes(18).toString("base64url"); return d.calKey; });
+        const last = await store.get(`cal:${device}`).catch(() => null);
+        return send(res, 200, { url: calendarUrl(key), last: last ? { at: last.at, count: last.events.length } : null });
+      }
       if (path === "/cloud/handoff") {
         const items = await withHandoffs((st) => st.items.filter((i) => i.task.device === device).map(forPhone), { save: false });
         return send(res, 200, { items: items.reverse().slice(0, 20), macOnline: online() });
@@ -526,7 +568,7 @@ export function createRelay({
         }
         if (path === "/cloud/briefing/now") {
           const dev = await withPhones((phones) => { const d = deviceOf(phones, device); d.prefs = cleanPrefs(body.prefs ?? {}, d.prefs); return d; });
-          const b = await buildBriefing({ prefs: dev.prefs, dev, now: now(), tools: briefingTools, digest: await store.get("digest").catch(() => null), macOnline: online() });
+          const b = await buildBriefing({ prefs: dev.prefs, dev, now: now(), tools: briefingTools, digest: await store.get("digest").catch(() => null), macOnline: online(), phoneCal: await store.get(`cal:${device}`).catch(() => null) });
           await store.set(`brief:${device}`, b, 3 * 86400).catch(() => {});
           return send(res, 200, { briefing: b });
         }
@@ -569,6 +611,22 @@ export function createRelay({
         return send(res, 200, { url: icsUrl(event) });
       } catch (e) { return sendCloudError(res, e); }
     }
+    if (path === "/cloud/snaps/done" || path === "/cloud/snaps/delete" || path === "/cloud/calendar/reset") {
+      try {
+        const body = await readJson(req, 16 * 1024);
+        if (path === "/cloud/calendar/reset") {
+          const key = await withPhones((phones) => { const d = deviceOf(phones, device); d.calKey = randomBytes(18).toString("base64url"); return d.calKey; });
+          return send(res, 200, { url: calendarUrl(key) });
+        }
+        if (path === "/cloud/snaps/delete") {
+          await withSnaps(device, (st) => { st.items = st.items.filter((x) => x.id !== body.id); });
+          return send(res, 200, { ok: true });
+        }
+        if (!["expense", "reminder"].includes(body.type)) return send(res, 400, { error: "input" });
+        await withSnaps(device, (st) => { const e = st.items.find((x) => x.id === body.id); if (e) e.done = { ...(e.done ?? {}), [body.type]: true }; });
+        return send(res, 200, { ok: true });
+      } catch (e) { return sendCloudError(res, e); }
+    }
     if (path === "/cloud/handoff" || path === "/cloud/handoff/cancel") {
       try {
         const body = await readJson(req, 64 * 1024);
@@ -601,8 +659,8 @@ export function createRelay({
         const body = await readJson(req, 64 * 1024);
         const tz = validTz(body.tz) ? body.tz : "UTC";
         const snap = recheckSnap(body.snap);
-        const actions = snapActions(snap, { today: localParts(now(), tz).date });
-        for (const a of actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
+        const actions = withLinks(snapActions(snap, { today: localParts(now(), tz).date }));
+        if (typeof body.id === "string") await withSnaps(device, (st) => { const e = st.items.find((x) => x.id === body.id); if (e) e.snap = snap; });
         return send(res, 200, { snap, actions });
       } catch (e) { return sendCloudError(res, e); }
     }
@@ -614,7 +672,11 @@ export function createRelay({
         const image = String(body.image ?? "");
         if (image.length > MAX_IMAGE_B64 || !/^[A-Za-z0-9+/=]{1000,}$/.test(image)) return send(res, 400, { error: "input", message: "That photo didn't come through. Try again." });
         const result = await cloud.snap({ image, context: body.context ?? {} });
-        for (const a of result.actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
+        withLinks(result.actions);
+        if (result.snap.readable) {
+          result.id = randomUUID().slice(0, 8);
+          await withSnaps(device, (st) => { st.items = [...st.items, { id: result.id, at: now(), snap: result.snap, done: {} }].slice(-MAX_SNAPS); });
+        }
         return send(res, 200, result);
       } catch (e) { return sendCloudError(res, e); }
     }
@@ -635,6 +697,19 @@ export function createRelay({
       } catch (e) { return sendCloudError(res, e); }
     }
     return send(res, 404, "Not found");
+  }
+
+  /** The iPhone's Shortcut posts today's events here each morning (see Settings → Calendar from this iPhone). */
+  async function phoneCalendarUpload(req, res, key) {
+    if (rateLimited(`cal:${key}`)) return send(res, 429, "Too many uploads this minute.");
+    const device = await withPhones((phones) => Object.entries(phones.devices).find(([, d]) => d.calKey && d.calKey.length === key.length && timingSafeEqual(Buffer.from(d.calKey), Buffer.from(key)))?.[0] ?? null, { save: false });
+    if (!device) return send(res, 404, "This calendar link isn't valid any more. Copy the new one from Echo's Settings.");
+    try {
+      const raw = (await readBody(req, 64 * 1024)).toString("utf8");
+      const events = parsePhoneCalendar(raw);
+      await store.set(`cal:${device}`, { at: now(), events }, 3 * 86400);
+      return send(res, 200, `Echo got ${events.length} event${events.length === 1 ? "" : "s"} for today.`);
+    } catch { return send(res, 400, "Echo couldn't read that."); }
   }
 
   async function cronTick(req, res) {
@@ -666,6 +741,8 @@ export function createRelay({
     if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
     if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
     if (path === "/cron/tick" && req.method === "POST") return void cronTick(req, res);
+    const cal = /^\/cal\/([A-Za-z0-9_-]{20,40})$/.exec(path);
+    if (cal && req.method === "POST") return void phoneCalendarUpload(req, res, cal[1]);
     const ics = /^\/ics\/(v1\.[A-Za-z0-9_-]{20,4000})\.ics$/.exec(path);
     if (ics && req.method === "GET") {
       const event = icsFromUrl(ics[1]);

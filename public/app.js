@@ -137,6 +137,7 @@
     if (view === "home" && window.echoCore) window.echoCore.replay(); // the figure assembles every time
     if (view === "chat") { unread = 0; renderBadge(); setTimeout(scrollMessages, 30); pollChat(); }
     if (view === "world") loadWorld();
+    if (view === "settings") loadPhoneCal();
     if (view === "screen") openScreen(); else closeScreen();
     if (view === "missions") { if (last) renderMissions(last); renderHandoffs(); loadHandoffs(); }
     if (view === "brain" && last) renderBrain(last);
@@ -830,6 +831,7 @@
       try {
         await cloudApi("/cloud/reminders", { text: a.data.title, when: a.data.start, tz: localTz() });
         a.done = true; saveCache();
+        if (a.snapId) cloudApi("/cloud/snaps/done", { id: a.snapId, type: "reminder" }).catch(() => {});
         btn.textContent = `Reminder set · ${eventWhen(a.data.start)}`;
         toast(`Echo will remind you ${eventWhen(a.data.start)}`);
       } catch (e) { toast(cloudProblem(e), true); }
@@ -1194,7 +1196,12 @@
     snapFile.value = "";
     snapFile.click();
   }
-  $("act-screen").addEventListener("click", () => (mode === "phone" ? openSnap() : show("screen")));
+  $("act-screen").addEventListener("click", () => (mode === "phone" ? openSnapPage() : show("screen")));
+  function openSnapPage() {
+    if (!passValid()) return toast("Sign in once with your Mac online to use Snap.", true);
+    show("snap");
+    renderSnap();
+  }
   $("snap-chat").addEventListener("click", () => openSnap());
   $("snap-again").addEventListener("click", () => openSnap());
   snapFile.addEventListener("change", () => { const f = snapFile.files && snapFile.files[0]; if (f) readSnap(f); });
@@ -1222,7 +1229,7 @@
       snapState.url = URL.createObjectURL(blob);
       renderSnap();
       const d = await cloudApi("/cloud/snap", { image: toBase64(await blob.arrayBuffer()), context: cloudContext() });
-      Object.assign(snapState, { busy: false, result: d.snap, actions: d.actions || [] });
+      Object.assign(snapState, { busy: false, id: d.id || null, result: d.snap, actions: d.actions || [] });
       if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
     } catch (e) {
       Object.assign(snapState, { busy: false, error: e.status ? cloudProblem(e) : e.message || "That didn't work. Try again." });
@@ -1241,6 +1248,7 @@
     clear(box);
     const st = snapState || {};
     if (st.url) { const img = el("img", "snap-photo"); img.src = st.url; img.alt = "Your photo"; box.appendChild(img); }
+    if (st.fromHistory) box.appendChild(el("p", "brief-date", `Scanned ${new Date(st.at).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })} · ${clock(st.at)}`));
     if (st.busy) { const c = el("section", "glass bcard"); c.appendChild(el("p", "snap-busy", st.url ? "Reading your photo…" : "Preparing your photo…")); box.appendChild(c); }
     else if (st.error || (st.result && !st.result.readable)) {
       const c = el("section", "glass bcard");
@@ -1277,6 +1285,13 @@
       if (r.account) fields.append(el("label", "", "Account"), el("span", "", `ends ${r.account}`));
       for (const d of r.deadlines || []) fields.append(el("label", "", "Deadline"), el("span", "", `${d.date} — ${d.what}`));
       if (fields.childNodes.length) c.appendChild(fields);
+      if (st.id) {
+        const del = el("button", "text-btn", "Delete this scan");
+        del.addEventListener("click", async () => {
+          try { await cloudApi("/cloud/snaps/delete", { id: st.id }); snapState = null; toast("Scan deleted"); renderSnap(); } catch (e) { toast(cloudProblem(e), true); }
+        });
+        c.appendChild(del);
+      }
       box.appendChild(c);
       if (r.translation) box.appendChild(bcard(`In English${r.language ? `, from ${r.language}` : ""}`, el("p", "small", r.translation)));
       const acts = el("div", "snap-acts"); acts.id = "snap-acts";
@@ -1288,7 +1303,9 @@
       const go = el("button", "cta big-btn", "Take or choose a photo"); go.addEventListener("click", openSnap);
       c.appendChild(go); box.appendChild(c);
     }
+    const hist = el("section", "glass bcard"); hist.id = "snap-history"; box.appendChild(hist);
     const exp = el("section", "glass bcard"); exp.id = "snap-expenses"; box.appendChild(exp);
+    loadScans();
     loadExpenses();
   }
   function renderSnapActions() {
@@ -1296,6 +1313,7 @@
     if (!acts || !snapState || !snapState.actions) return;
     clear(acts);
     snapState.actions.forEach((a, i) => {
+      a.snapId = snapState.id || null;
       const day = (local) => { const d = new Date(local); return isNaN(d) ? local : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }); };
       const label = a.type === "reminder" && /^Remind me (on|today)/.test(a.label) ? `Remind me ${day(a.data.start)}, 9:00` : a.label;
       const done = a.done && a.type === "expense" ? `Saved · ${money(a.data.amount, a.data.currency)}` : a.done ? `Reminder set · ${eventWhen(a.data.start)}` : label;
@@ -1307,8 +1325,9 @@
   async function refreshSnapActions() {
     if (!snapState || !snapState.result) return;
     try {
-      const d = await cloudApi("/cloud/snap/actions", { snap: snapState.result, tz: localTz() });
-      snapState.actions = d.actions;
+      const d = await cloudApi("/cloud/snap/actions", { snap: snapState.result, tz: localTz(), ...(snapState.id ? { id: snapState.id } : {}) });
+      const was = new Map((snapState.actions || []).filter((a) => a.done).map((a) => [a.type, true]));
+      snapState.actions = d.actions.map((a) => ({ ...a, done: was.get(a.type) || false }));
       renderSnapActions();
     } catch { /* the old buttons stay */ }
   }
@@ -1320,6 +1339,7 @@
       try {
         await cloudApi("/cloud/expenses", { expense: a.data, tz: localTz() });
         a.done = true;
+        if (a.snapId) cloudApi("/cloud/snaps/done", { id: a.snapId, type: "expense" }).catch(() => {});
         btn.textContent = `Saved · ${money(a.data.amount, a.data.currency)}`;
         toast(`Saved: ${money(a.data.amount, a.data.currency)} · ${a.data.category}`);
         loadExpenses();
@@ -1335,6 +1355,35 @@
       // Phone mode carries the photo's details itself; the Mac gets them in the message.
       sendChat(mode === "phone" ? a.data.prompt : `${a.data.prompt}\n\n(About a photo I took — ${snapLines(r)})`);
     }
+  }
+  const KIND_SHORT = { bill: "BILL", receipt: "RCPT", event: "EVT", letter: "LTR", menu: "MENU", product: "ITEM", other: "PIC" };
+  async function loadScans() {
+    const box = $("snap-history");
+    if (!box || !passValid()) return;
+    try {
+      const d = await cloudApi("/cloud/snaps");
+      clear(box);
+      box.appendChild(el("h3", "", "Your scans"));
+      if (!d.items.length) { box.appendChild(el("p", "sub small", "Scans you take show up here, with what Echo found. Photos aren't kept.")); return; }
+      for (const it of d.items.slice(0, 30)) {
+        const row = el("button", `scan-row${snapState && snapState.id === it.id ? " on" : ""}`);
+        const t = el("span", "grow");
+        const what = it.amount != null ? money(it.amount, it.currency) : it.date ? eventWhen(it.date) : it.summary;
+        t.append(el("span", "clamp1", it.title), el("span", "sub tiny clamp1", `${what || ""}${what ? " · " : ""}${ago(it.at)}`));
+        row.append(el("span", "scan-badge", KIND_SHORT[it.kind] || "PIC"), t);
+        row.addEventListener("click", () => openScan(it.id));
+        box.appendChild(row);
+      }
+    } catch { box.hidden = true; }
+  }
+  async function openScan(id) {
+    try {
+      const d = await cloudApi(`/cloud/snaps?id=${encodeURIComponent(id)}&tz=${encodeURIComponent(localTz())}`);
+      if (snapState && snapState.url) URL.revokeObjectURL(snapState.url);
+      snapState = { id: d.id, at: d.at, result: d.snap, actions: d.actions, fromHistory: true };
+      renderSnap();
+      document.querySelector("#v-snap .scroll").scrollTop = 0;
+    } catch (e) { toast(cloudProblem(e), true); }
   }
   async function loadExpenses() {
     const box = $("snap-expenses");
@@ -1507,6 +1556,35 @@
     catch (e) { toast(cloudProblem(e), true); }
   });
   $("brief-open").addEventListener("click", () => openBriefing());
+  // Calendar from this iPhone: a Shortcut posts today's events to a private link.
+  let phoneCal = null, resetArmed = 0;
+  function renderPhoneCal() {
+    const last = phoneCal && phoneCal.last;
+    $("phonecal-state").textContent = last ? (new Date(last.at).toDateString() === new Date().toDateString() ? `${last.count} today` : "On") : "Set up";
+    $("pc-status").textContent = last
+      ? `Last received ${new Date(last.at).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })} at ${clock(last.at)}: ${last.count} event${last.count === 1 ? "" : "s"}.`
+      : "Not set up yet. Follow the steps once.";
+  }
+  async function loadPhoneCal() {
+    if (!passValid()) return;
+    try { phoneCal = await cloudApi("/cloud/calendar"); renderPhoneCal(); } catch { /* keep */ }
+  }
+  $("phonecal-open").addEventListener("click", () => {
+    if (!passValid()) return toast("Sign in once with your Mac online first.", true);
+    openSheet("sheet-phonecal");
+    loadPhoneCal();
+  });
+  $("pc-copy").addEventListener("click", async () => {
+    if (!phoneCal) return toast("One moment…");
+    try { await navigator.clipboard.writeText(phoneCal.url); toast("Link copied. Paste it into Get Contents of URL."); }
+    catch { toast("Couldn't copy. Long-press to copy instead.", true); }
+  });
+  $("pc-reset").addEventListener("click", async () => {
+    if (Date.now() - resetArmed > 4000) { resetArmed = Date.now(); return toast("Tap again to make a new link. The old one stops working."); }
+    resetArmed = 0;
+    try { const d = await cloudApi("/cloud/calendar/reset", {}); phoneCal = { ...(phoneCal || {}), url: d.url }; toast("New link made. Copy it into your Shortcut."); }
+    catch (e) { toast(cloudProblem(e), true); }
+  });
   $("brief-refresh").addEventListener("click", () => briefNow());
 
   const todayLocal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
@@ -1547,8 +1625,9 @@
     if (b.weather) box.appendChild(bcard(b.place || "Weather", el("div", "big", `${b.weather.temp}° ${b.weather.text}`), el("p", "sub small", `High ${b.weather.high}°, low ${b.weather.low}°.${b.weather.tip ? ` ${b.weather.tip}` : ""}`)));
     else box.appendChild(bcard("Weather", el("p", "sub small", b.place ? "Weather isn't available right now." : "Set your weather location in Settings for weather and nearby alerts.")));
     const asOf = b.macAsOf ? el("p", "fine", `From your Mac, as of ${clock(b.macAsOf)}${new Date(b.macAsOf).toDateString() !== new Date(b.at).toDateString() ? " yesterday" : ""}`) : null;
-    if (b.calendar) box.appendChild(bcard("Calendar", b.calendar.length ? blist(b.calendar.map((e) => [e.time, e.title])) : el("p", "sub small", "Nothing on your calendar today."), asOf));
-    else box.appendChild(bcard("Calendar", el("p", "sub small", "Your Mac hasn't shared your calendar yet. It does within a minute of Echo connecting.")));
+    const calFrom = b.calendarFrom === "iphone" ? el("p", "fine", `From your iPhone at ${clock(b.calendarAt)}`) : asOf;
+    if (b.calendar) box.appendChild(bcard("Calendar", b.calendar.length ? blist(b.calendar.map((e) => [e.time, e.location ? `${e.title} · ${e.location}` : e.title])) : el("p", "sub small", "Nothing on your calendar today."), calFrom));
+    else box.appendChild(bcard("Calendar", el("p", "sub small", "No calendar yet. Set up Settings → Calendar from this iPhone, or turn on your Mac.")));
     if (b.email && b.email.length) box.appendChild(bcard("Needs you", blist(b.email.map((m) => [null, `${m.from} — ${m.subject}`]))));
     if (b.reminders && b.reminders.length) box.appendChild(bcard("Reminders", blist(b.reminders.map((r) => [r.time, r.text]))));
     if (b.near) {

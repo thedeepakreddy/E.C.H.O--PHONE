@@ -126,3 +126,33 @@ test("after a snap, Phone mode's chat knows what the photo said, as information 
   assert.match(p, /Amount: 18420 HUF/);
   assert.match(p, /Due: 2026-10-14/);
 });
+
+test("relay: every readable scan is kept in history (never the photo), and can be reopened", async () => {
+  const relay = createRelay({ secret: SECRET, now: () => NOW, gemini: scripted([answer(BILL), answer({ readable: false, kind: "other", title: "", summary: "" })]), fetchJson: async () => ({}) });
+  const server = http.createServer(relay.handler);
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const pass = signPass(relay.keys.pass, { device: DEVICE, gen: 0, now: NOW });
+  const post = (p, body) => fetch(base + p, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify(body) }).then((r) => r.json());
+  const get = (p) => fetch(base + p, { headers: { "x-echo-pass": pass } }).then((r) => r.json());
+  try {
+    const first = await post("/cloud/snap", { image: IMAGE, context: { tz: "Europe/Budapest" } });
+    assert.match(first.id, /^[0-9a-f-]{8}$/);
+    const blurry = await post("/cloud/snap", { image: IMAGE });
+    assert.equal(blurry.id, undefined, "an unreadable photo isn't kept");
+    const list = await get("/cloud/snaps");
+    assert.equal(list.items.length, 1);
+    assert.equal(list.items[0].title, "Electricity bill · MVM Next");
+    assert.equal(list.items[0].amount, 18420);
+    // A correction is saved with the scan; a used button is remembered.
+    await post("/cloud/snap/actions", { id: first.id, snap: { ...first.snap, dueDate: "2026-10-20" }, tz: "Europe/Budapest" });
+    await post("/cloud/snaps/done", { id: first.id, type: "expense" });
+    const again = await get(`/cloud/snaps?id=${first.id}&tz=Europe/Budapest`);
+    assert.equal(again.snap.dueDate, "2026-10-20");
+    assert.equal(again.actions.find((a) => a.type === "expense").done, true);
+    assert.match(again.actions.find((a) => a.type === "reminder").url, /^\/ics\/v1\./, "reopened buttons come with fresh links");
+    assert.equal(JSON.stringify(again).includes(IMAGE.slice(0, 50)), false, "no photo in history");
+    await post("/cloud/snaps/delete", { id: first.id });
+    assert.equal((await get("/cloud/snaps")).items.length, 0);
+  } finally { server.closeAllConnections?.(); server.close(); }
+});

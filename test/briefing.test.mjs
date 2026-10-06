@@ -199,3 +199,51 @@ test("relay: subscribe, test notification, reminders and briefing, end to end", 
     svc.server.closeAllConnections?.(); svc.server.close();
   }
 });
+
+import { parsePhoneCalendar } from "../lib/briefing.js";
+
+test("the iPhone's calendar: lines from a Shortcut, or JSON", () => {
+  const lines = "2026-10-08T10:00:00+02:00 | Design review | Room 4\n2026-10-08T13:30:00+02:00 | Dentist\nnot a date | x\n | no time";
+  const ev = parsePhoneCalendar(lines);
+  assert.deepEqual(ev.map((e) => e.title), ["Design review", "Dentist"]);
+  assert.equal(ev[0].start, "2026-10-08T08:00:00.000Z");
+  assert.equal(ev[0].location, "Room 4");
+  assert.equal(parsePhoneCalendar(JSON.stringify({ events: lines })).length, 2, "the same lines inside JSON");
+  assert.equal(parsePhoneCalendar({ events: [{ start: "2026-10-08T10:00:00Z", title: "Gym" }] })[0].title, "Gym");
+});
+
+test("the briefing uses today's calendar from the iPhone over the Mac's", async () => {
+  const prefs = cleanPrefs({ on: true, tz: "Europe/Budapest" });
+  const phoneCal = { at: NOW - 15 * 60_000, events: parsePhoneCalendar("2026-10-08T09:00:00+02:00 | Standup | Zoom") };
+  const br = await buildBriefing({ prefs, dev: { reminders: [] }, now: NOW, tools: {}, digest, phoneCal });
+  assert.equal(br.calendarFrom, "iphone");
+  assert.deepEqual(br.calendar, [{ title: "Standup", time: "09:00", location: "Zoom" }]);
+  const stale = await buildBriefing({ prefs, dev: { reminders: [] }, now: NOW, tools: {}, digest, phoneCal: { ...phoneCal, at: NOW - 86400_000 } });
+  assert.equal(stale.calendarFrom, "mac", "yesterday's upload isn't today's calendar: the Mac's is used");
+});
+
+test("relay: the Shortcut's link uploads today's events, and nothing else", async () => {
+  const relay = createRelay({ secret: SECRET, now: () => NOW, fetchJson: async () => ({}), publicUrl: "https://echo-phone.onrender.com" });
+  const server = http.createServer(relay.handler);
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const pass = signPass(relay.keys.pass, { device: DEVICE, gen: 0, now: NOW });
+  const get = (p) => fetch(base + p, { headers: { "x-echo-pass": pass } }).then((r) => r.json());
+  try {
+    const { url, last } = await get("/cloud/calendar");
+    assert.match(url, /^https:\/\/echo-phone\.onrender\.com\/cal\/[A-Za-z0-9_-]{24}$/);
+    assert.equal(last, null);
+    assert.equal((await get("/cloud/calendar")).url, url, "the same link every time");
+    const path = new URL(url).pathname;
+    const up = await fetch(base + path, { method: "POST", body: "2026-10-08T10:00:00+02:00 | Design review\n2026-10-08T13:30:00+02:00 | Dentist" });
+    assert.equal(await up.text(), "Echo got 2 events for today.");
+    assert.equal((await get("/cloud/calendar")).last.count, 2);
+    assert.equal((await fetch(`${base}/cal/${"x".repeat(24)}`, { method: "POST", body: "a" })).status, 404, "a made-up link does nothing");
+    const brief = await (await fetch(`${base}/cloud/briefing/now`, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify({ prefs: { tz: "Europe/Budapest" } }) })).json();
+    assert.equal(brief.briefing.calendarFrom, "iphone");
+    assert.deepEqual(brief.briefing.calendar.map((e) => e.title), ["Design review", "Dentist"]);
+    const reset = await (await fetch(`${base}/cloud/calendar/reset`, { method: "POST", headers: { "x-echo-pass": pass }, body: "{}" })).json();
+    assert.notEqual(reset.url, url);
+    assert.equal((await fetch(base + path, { method: "POST", body: "x" })).status, 404, "after a reset the old link stops working");
+  } finally { server.closeAllConnections?.(); server.close(); }
+});

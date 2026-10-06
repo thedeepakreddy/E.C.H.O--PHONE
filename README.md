@@ -96,6 +96,9 @@ Turn on **Settings → Morning briefing → Briefing and reminders** in the Home
 
   **Brief me** builds it on demand.
 - **Reminders** from Phone mode arrive as Echo notifications at their time. With notifications off, they go to Calendar through Safari instead.
+- **Calendar from this iPhone:** a web app can't read the iPhone's calendar, so a one-time Shortcut automation posts today's events to a private link each morning. Find it in Settings → Morning briefing → Calendar from this iPhone, which has step-by-step instructions.
+  - The link can only add today's events for this phone's briefing, and **Make a new link** retires the old one.
+  - The briefing prefers that morning's events from the iPhone, and uses the Mac's summary otherwise.
 
 Notifications are encrypted end to end (Web Push, RFC 8291). The relay's notification key is derived from `RELAY_SECRET`, so there's nothing extra to configure. Timed work runs every minute while the relay is awake, and QStash wakes it every 5 minutes while the Mac is off.
 
@@ -112,6 +115,8 @@ Tap **Snap** on Home (in Phone mode) or the camera in Chat. Take or choose a pho
 | Product | Find it cheaper |
 
 Foreign-language text comes with an English translation. Expenses add up by month on the Snap page.
+
+**Your scans:** every readable scan is kept in its history, without the photo. That's what Echo found, your corrections, and which buttons you used. Tap one to reopen it with its buttons, or delete it.
 
 How it's kept safe:
 - The photo is shrunk on the phone (which drops its location data), sent for that one read, and never stored.
