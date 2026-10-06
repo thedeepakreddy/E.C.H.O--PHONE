@@ -271,6 +271,10 @@ body[data-status="asleep"] { --glow: #ff4d4d; --spin: 22s; --m50-hue: -178deg; -
   display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 10px;
 }
 .messages > :first-child { margin-top: auto; }
+/* Messages keep their own height. In a flex column the browser shrinks items
+   to fit, and a glass bubble (which clips its contents) can shrink to nothing:
+   Echo's replies were squashed into slivers and the chat had nothing to scroll. */
+.messages > * { flex-shrink: 0; }
 .msg { max-width: 80%; padding: 9px 13px; font-size: 16px; line-height: 1.35; overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
 .msg time { display: block; font-size: 10px; opacity: .65; margin-top: 2px; }
 .msg.me { align-self: flex-end; border-radius: 20px 20px 6px 20px; }
