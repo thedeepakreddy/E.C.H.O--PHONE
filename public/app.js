@@ -27,18 +27,20 @@
   // pinch and double-tap gestures so the app stays fixed like a native one.
   document.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false });
   document.addEventListener("gesturechange", (e) => e.preventDefault(), { passive: false });
-  let lastTouchEnd = 0;
-  document.addEventListener("touchend", (e) => {
-    const now = Date.now();
-    if (now - lastTouchEnd < 300 && !e.target.closest("input, textarea")) e.preventDefault();
-    lastTouchEnd = now;
-  }, { passive: false });
-  document.addEventListener("touchmove", (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+  // Double-tap zoom is off through touch-action: manipulation (app.css). No
+  // touchmove/touchend listener here: a blocking one makes every scroll wait
+  // on this script, which is what made the chat feel stuck.
+  let touching = false;
+  document.addEventListener("touchstart", () => { touching = true; }, { passive: true });
+  const lifted = () => { touching = false; setTimeout(fitViewport, 60); };
+  document.addEventListener("touchend", lifted, { passive: true });
+  document.addEventListener("touchcancel", lifted, { passive: true });
 
   // ---------- the visual viewport (keyboard) ----------
   // The page is sized to what is actually visible, so when the keyboard comes
   // up the chat composer rests right on top of it and the tab bar steps aside.
   const vv = window.visualViewport;
+  let stickToBottom = true; // is the chat showing its newest message?
   const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
   function fitViewport() {
     // A Home Screen app on iOS reports a page a status bar shorter than the
@@ -53,12 +55,16 @@
     document.documentElement.style.setProperty("--app-h", `${Math.round(appH)}px`);
     const typing = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
     body.classList.toggle("kb", !!(keyboard && typing));
-    if (vv && vv.offsetTop) window.scrollTo(0, 0);
-    if (keyboard && currentView === "chat") scrollMessages();
+    // iOS pans the page when the keyboard opens; pull it back, but never in the
+    // middle of a drag — that is what fought the finger and felt like a wall.
+    if (vv && vv.offsetTop && !touching) window.scrollTo(0, 0);
+    // Reading the newest message: stay on it while the keyboard comes and goes.
+    // Scrolled up through the conversation: stay right there.
+    if (body.dataset.view === "chat" && stickToBottom) scrollMessages();
   }
   if (vv) { vv.addEventListener("resize", fitViewport); vv.addEventListener("scroll", fitViewport); }
   // The page is the screen; it never scrolls as a whole (lists scroll inside it).
-  window.addEventListener("scroll", () => { if (!body.classList.contains("kb") && window.scrollY) window.scrollTo(0, 0); }, { passive: true });
+  window.addEventListener("scroll", () => { if (!body.classList.contains("kb") && window.scrollY && !touching) window.scrollTo(0, 0); }, { passive: true });
   window.addEventListener("resize", fitViewport);
   document.addEventListener("focusin", () => setTimeout(fitViewport, 50));
   document.addEventListener("focusout", () => setTimeout(fitViewport, 50));
@@ -411,6 +417,9 @@
   let chatAfter = 0, unread = 0, chatTyping = false, lastDay = "", chatLoaded = false;
   const messagesEl = $("messages");
   function scrollMessages() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+  messagesEl.addEventListener("scroll", () => {
+    stickToBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+  }, { passive: true });
   function renderBadge() { const b = $("chat-badge"); b.hidden = !unread; b.textContent = unread > 9 ? "9+" : String(unread); }
   function addMessage(m) {
     const day = new Date(m.at).toDateString();
