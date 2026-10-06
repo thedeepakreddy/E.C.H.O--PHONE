@@ -26,7 +26,15 @@
 <section id="v-signin" class="view signin" aria-label="Sign in">
   <div class="signin-hero">
     <span class="reactor-glow" aria-hidden="true"></span>
-    <img class="reactor drift" src="/img/reactor.png" alt="" aria-hidden="true">
+    <!-- The HUD's reactor: rings cut from one render, each turning at its own rate. -->
+    <div class="hud" aria-hidden="true">
+      <img class="hx-bloom-wide" src="/img/reactor.png" alt="">
+      <img class="hx-bloom" src="/img/reactor.png" alt="">
+      <img class="hx-mid" src="/img/reactor-mid.png" alt="">
+      <img class="hx-outer" src="/img/reactor-outer.png" alt="">
+      <img class="hx-core" src="/img/reactor-core.png" alt="">
+      <img class="hx-sweep" src="/img/reactor-outer.png" alt="">
+    </div>
   </div>
   <div class="signin-title">
     <h1>Welcome back</h1>
@@ -59,12 +67,13 @@
 
 <!-- ============ HOME ============ -->
 <section id="v-home" class="view home" aria-label="Echo" hidden>
-  <img class="hero" src="/img/humanoid.jpg" alt="Echo's particle core" decoding="async">
   <div class="hero-fade" aria-hidden="true"></div>
   <header class="top">
     <div><p class="sub small" id="greeting">Hello</p><h1>Echo</h1></div>
     <div class="glass pill" id="mac-pill"><span class="dot" id="mac-dot"></span><span id="mac-name">Your Mac</span></div>
   </header>
+  <!-- The live humanoid from Echo's control panel, drawn by humanoid-core.js. -->
+  <div class="hero-stage"><canvas id="core-canvas" role="img" aria-label="Echo, live"></canvas></div>
   <div class="home-stack">
     <div class="glass pill state-pill"><span class="dot pulse" id="state-dot"></span><b id="state-label">CONNECTING</b><span class="sub" id="brain-name"></span></div>
     <div class="actions">
@@ -269,6 +278,7 @@
 </section>
 
 <div class="toast glass" id="toast" role="status" aria-live="polite"></div>
+<script src="/humanoid-core.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>

@@ -39,7 +39,13 @@
   // The page is sized to what is actually visible, so when the keyboard comes
   // up the chat composer rests right on top of it and the tab bar steps aside.
   const vv = window.visualViewport;
+  const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
   function fitViewport() {
+    // A Home Screen app on iOS reports a page a status bar shorter than the
+    // screen, which left a gap under the tab bar; in portrait use the screen.
+    const portrait = window.innerWidth < window.innerHeight;
+    const appH = standalone && portrait ? Math.max(window.innerHeight, screen.height) : window.innerHeight;
+    document.documentElement.style.setProperty("--app-h", `${Math.round(appH)}px`);
     const h = vv ? vv.height : window.innerHeight;
     document.documentElement.style.setProperty("--vvh", `${Math.round(h)}px`);
     const keyboard = vv ? window.innerHeight - vv.height > 140 : false;
@@ -97,6 +103,7 @@
       if (b.dataset.tab === view) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
     }
     if (TABS.includes(view)) { lastTab = view; store.set("echo_tab", view); }
+    if (view === "home" && window.echoCore) window.echoCore.replay(); // the figure assembles every time
     if (view === "chat") { unread = 0; renderBadge(); setTimeout(scrollMessages, 30); pollChat(); }
     if (view === "world") loadWorld();
     if (view === "screen") openScreen(); else closeScreen();
@@ -257,6 +264,7 @@
   }
   function renderOffline() {
     $("state-label").textContent = "MAC OFFLINE";
+    body.dataset.status = "asleep";
     $("state-dot").style.background = "#ff8a8a";
     $("mac-dot").className = "dot";
     $("activity-line").textContent = "Your Mac is asleep, off, or Echo isn't running.";
@@ -267,6 +275,7 @@
     const h = new Date().getHours();
     $("greeting").textContent = h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : h < 22 ? "Good evening" : "Good night";
     const st = STATE[d.status] || STATE.idle;
+    body.dataset.status = STATE[d.status] ? d.status : "idle"; // drives the humanoid and the reactor
     $("state-label").textContent = st[0];
     $("state-dot").style.background = st[1];
     $("state-dot").style.boxShadow = `0 0 12px ${st[1]}`;

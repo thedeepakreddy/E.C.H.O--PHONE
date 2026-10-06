@@ -27,8 +27,11 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; overscroll-behavior: none; }
+/* Sized by --app-h, set from the screen in a Home Screen app: iOS lays the
+   page out a status bar short there, which left a gap under the tab bar. The
+   transform makes body the box every fixed view, sheet and the tab bar sit in. */
 body {
-  position: fixed; inset: 0; color: var(--text);
+  position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); transform: translateZ(0); color: var(--text);
   font: 400 15px/1.4 -apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased; touch-action: manipulation; user-select: none; -webkit-user-select: none;
 }
@@ -181,7 +184,37 @@ body.kb .tabbar { transform: translateY(calc(100% + 40px)); opacity: 0; pointer-
 /* ---------- sign in ---------- */
 .signin { align-items: stretch; justify-content: flex-end; padding: calc(var(--safe-top) + 10px) 14px calc(var(--safe-bottom) + 14px); gap: 18px; }
 .signin-hero { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; container-type: size; }
-.reactor { width: min(62vw, 260px, 86cqh); height: auto; filter: drop-shadow(0 0 30px rgba(110, 240, 255, .6)) saturate(1.2); }
+/* The HUD's reactor (Echo Mac/renderer/hud.css): one render cut into rings
+   that turn at their own rates, a bloom that breathes, and a light sweep. */
+.hud { --size: min(62vw, 260px, 86cqh); position: relative; width: var(--size); height: var(--size); display: grid; place-items: center; }
+.hud > * { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.hx-mid, .hx-core, .hx-outer, .hx-sweep { filter: hue-rotate(var(--m50-hue, 0deg)) contrast(var(--m50-contrast, 1)) saturate(var(--m50-sat, 1.15)); }
+.hx-outer { filter: hue-rotate(var(--m50-hue, 0deg)) contrast(var(--m50-contrast, 1)) saturate(var(--m50-sat, 1.15)) drop-shadow(0 calc(var(--size) * .05) calc(var(--size) * .08) rgba(0, 0, 0, .55)); }
+.hx-bloom { --bloom-base: .54; mix-blend-mode: screen; opacity: var(--bloom-base); filter: hue-rotate(var(--m50-hue, 0deg)) brightness(2.6) saturate(1.2) blur(calc(var(--size) * .028)) drop-shadow(0 0 calc(var(--size) * .045) var(--glow, #5ee7f5)); }
+.hx-bloom-wide { --bloom-base: .42; mix-blend-mode: screen; opacity: var(--bloom-base); transform: scale(1.06); filter: hue-rotate(var(--m50-hue, 0deg)) brightness(2.15) saturate(1.3) blur(calc(var(--size) * .07)) drop-shadow(0 0 calc(var(--size) * .09) var(--glow, #5ee7f5)); }
+/* Echo's state turns the reactor and recolours it, as on the Mac's HUD. */
+body[data-status="listening"] { --glow: #45e0ff; --spin: 4s; --m50-hue: 6deg; --m50-contrast: 1.26; --m50-sat: 1.4; }
+body[data-status="thinking"] { --glow: #b98cff; --spin: 2s; --m50-hue: 78deg; --m50-sat: 1.15; }
+body[data-status="speaking"] { --glow: #ffcf40; --spin: 6s; --m50-hue: -148deg; --m50-contrast: 1.38; --m50-sat: 1.45; }
+body[data-status="acting"] { --glow: #74f2a0; --spin: 1.1s; --m50-hue: -48deg; --m50-contrast: 1.12; --m50-sat: 1.22; }
+body[data-status="asleep"] { --glow: #ff4d4d; --spin: 22s; --m50-hue: -178deg; --m50-sat: 1.15; }
+@property --m50-sweep { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+.hx-sweep {
+  mix-blend-mode: screen; opacity: .85; filter: hue-rotate(var(--m50-hue, 0deg)) saturate(1.5) brightness(2.1);
+  -webkit-mask-image: conic-gradient(from var(--m50-sweep), transparent 0deg, #000 14deg, #000 30deg, transparent 52deg, transparent 360deg);
+  mask-image: conic-gradient(from var(--m50-sweep), transparent 0deg, #000 14deg, #000 30deg, transparent 52deg, transparent 360deg);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin-reverse { to { transform: rotate(-360deg); } }
+@keyframes m50-sweep-run { to { --m50-sweep: 360deg; } }
+@keyframes m50-breathe { 0%, 100% { opacity: var(--bloom-base); } 50% { opacity: calc(var(--bloom-base) + .22); } }
+@media (prefers-reduced-motion: no-preference) {
+  .hx-outer { animation: spin var(--spin, 9s) linear infinite; }
+  .hx-mid { animation: spin-reverse calc(var(--spin, 9s) * 2.3) linear infinite; }
+  .hx-sweep { animation: m50-sweep-run calc(var(--spin, 9s) * .62) linear infinite; }
+  .hx-bloom { animation: m50-breathe var(--spin, 9s) ease-in-out infinite; }
+  .hx-bloom-wide { animation: m50-breathe calc(var(--spin, 9s) * 1.15) ease-in-out infinite; }
+}
 .reactor-glow { position: absolute; width: min(75vw, 300px, 100cqh); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(110, 240, 255, .45), rgba(110, 240, 255, 0) 70%); filter: blur(20px); }
 .signin-title { text-align: center; }
 .signin-title h1 { font-size: 32px; }
@@ -197,8 +230,12 @@ body.kb .tabbar { transform: translateY(calc(100% + 40px)); opacity: 0; pointer-
 /* ---------- home ---------- */
 .home { overflow: hidden; }
 /* The figure fills the width: head under the header, shoulders edge to edge. */
-.hero { position: absolute; left: 50%; top: calc(var(--safe-top) + 20px); width: max(130vw, 500px); transform: translateX(-50%); -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent 100%); mask-image: linear-gradient(180deg, #000 70%, transparent 100%); pointer-events: none; }
-.hero-fade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(2, 7, 10, .6) 0%, rgba(2, 7, 10, 0) 16%, rgba(2, 7, 10, 0) 46%, rgba(2, 7, 10, .8) 62%, var(--bg) 78%); }
+/* The live humanoid: its stage is the gap between header and status pill, and
+   the canvas runs past it so the crown meets the header and the shoulders
+   fade out behind the controls. */
+.hero-stage { position: relative; z-index: 0; flex: 1; min-height: 0; pointer-events: none; }
+#core-canvas { position: absolute; left: 0; width: 100%; top: -56px; height: calc(100% + 176px); display: block; }
+.hero-fade { position: absolute; z-index: 1; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(2, 7, 10, .6) 0%, rgba(2, 7, 10, 0) 16%, rgba(2, 7, 10, 0) 46%, rgba(2, 7, 10, .8) 62%, var(--bg) 78%); }
 .home .top { position: relative; z-index: 2; }
 .home .top h1 { font-size: 30px; }
 .home-stack { position: relative; z-index: 2; margin-top: auto; padding: 0 14px calc(var(--tab-h) + var(--tab-gap) + 12px); display: flex; flex-direction: column; gap: 12px; }
@@ -340,5 +377,4 @@ body.kb .reactor-glow { display: none; }
   .home .top h1 { font-size: 26px; }
   .card { min-height: 84px; }
   .b58 { width: 52px; height: 52px; }
-  .hero { width: max(115vw, 420px); }
 }
