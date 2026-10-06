@@ -538,3 +538,19 @@ body.kb .br-panel { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .br-spin, .br-progress.on { animation: none; } }
 .br-stall { position: absolute; left: 12px; right: 12px; bottom: 12px; border-radius: 22px; padding: 14px; display: flex; flex-direction: column; gap: 8px; z-index: 2; }
 .br-retry { min-height: 46px; font-size: 15px; border-radius: 16px; }
+/* Echo's plan and the human in the loop */
+.br-plan { list-style: none; margin: 0; padding: 6px 8px 2px; max-height: 24vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+.br-plan li { display: flex; gap: 8px; align-items: baseline; color: var(--sub); line-height: 1.3; }
+.br-plan .bp-mark { flex: none; width: 14px; text-align: center; font-weight: 700; }
+.br-plan .bp-active { color: var(--text); font-weight: 600; }
+.br-plan .bp-active .bp-mark { color: var(--cyan); animation: breathe 1.4s ease-in-out infinite; }
+.br-plan .bp-done .bp-mark { color: var(--green); }
+.br-plan .bp-failed .bp-mark { color: var(--red); }
+.br-plan .bp-skipped { text-decoration: line-through; opacity: .7; }
+.br-plan .bp-try { flex: none; font-size: 11px; color: var(--amber); }
+.br-hitl { margin: 2px 6px; padding: 10px 12px; border-radius: 18px; background: rgba(255, 179, 92, .1); box-shadow: inset 0 0 0 1px rgba(255, 179, 92, .45); display: flex; flex-direction: column; gap: 8px; }
+.br-q { font-size: 15px; font-weight: 600; line-height: 1.35; user-select: text; -webkit-user-select: text; }
+.br-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.br-choices:empty { display: none; }
+.br-choices .small-pill { padding: 8px 14px; font-size: 14px; }
+.br-count { font-size: 12px; color: var(--amber); font-variant-numeric: tabular-nums; }

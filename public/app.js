@@ -1803,7 +1803,7 @@
   // button and field numbered, picks one action at a time (lib/browse-agent.js)
   // and waits for your tap before anything that pays, sends, submits or deletes.
   const brFrame = $("br-frame");
-  const PART = 12_000, MAX_RUN_STEPS = 30;
+  const PART = 12_000;
   const br = { session: 0, url: "", title: "", back: [], fwd: [], nav: null, loading: false, run: null, snap: null, waiters: [] };
   const RECENT_KEY = "echo_br_recent";
   const b64u = (s) => { const bytes = new TextEncoder().encode(s); let bin = ""; for (const b of bytes) bin += String.fromCharCode(b); return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
@@ -2075,17 +2075,78 @@
     e.style.outline = "3px solid #5ee7f5"; e.style.outlineOffset = "2px";
     return () => { e.style.outline = was; e.style.outlineOffset = ""; };
   }
-  let approvalResolve = null;
+  // ----- the human in the loop -----
+  // Echo asks when it's stuck or needs a choice, and waits a minute. With no
+  // answer it decides by itself and carries on, except for anything risky
+  // (paying, sending, submitting, deleting): that isn't done without a tap.
+  const HITL_S = 60;
+  let hitl = null;
+  function closeHitl(value) {
+    if (!hitl) return;
+    const h = hitl; hitl = null;
+    clearInterval(h.timer);
+    $("br-hitl").hidden = true;
+    const ask = $("br-ask");
+    if (ask.dataset.mode === "answer") { ask.dataset.mode = ""; ask.hidden = true; $("br-task").placeholder = "Ask Echo to do something here"; }
+    h.resolve(value);
+  }
+  /**
+   * Ask the user, with buttons (`choices`) and/or a typed answer (`text`).
+   * After a minute, `fallback` (a choice id, or null) is taken for them.
+   * Resolves with { id, text, timedOut }.
+   */
+  function askHuman(question, { choices = [], fallback = null, fallbackLabel = "Echo decides by itself", text = false } = {}) {
+    closeHitl({ id: null, text: "", timedOut: false });
+    return new Promise((resolve) => {
+      renderRun("Echo needs you", "Answer below, or Echo carries on by itself in a minute.");
+      $("br-q").textContent = question;
+      const box = $("br-choices");
+      clear(box);
+      for (const c of choices) {
+        const b = el("button", c.primary ? "cta small-pill" : "glass small-pill", c.label);
+        b.addEventListener("click", () => closeHitl({ id: c.id, text: "", timedOut: false }));
+        box.appendChild(b);
+      }
+      $("br-hitl").hidden = false;
+      if (text) {
+        const ask = $("br-ask");
+        ask.hidden = false; ask.dataset.mode = "answer";
+        $("br-task").placeholder = choices.length ? "Or tell Echo what to do" : "Type your answer";
+        $("br-task").value = "";
+      }
+      let left = HITL_S;
+      const tick = () => {
+        $("br-count").textContent = `${fallbackLabel} in ${left} s`;
+        if (left-- <= 0) closeHitl({ id: fallback, text: "", timedOut: true });
+      };
+      hitl = { resolve, timer: setInterval(tick, 1000) };
+      tick();
+      try { if (navigator.vibrate) navigator.vibrate(60); } catch { /* not on iPhone */ }
+    });
+  }
+  let approvalResolve = null, approvalTimer = 0;
+  /** Risky steps: Go ahead or Don't. With no answer in a minute it's a no. Resolves true, false or "timeout". */
   function askApproval(what) {
     $("ba-what").textContent = what;
     $("ba-host").textContent = br.url ? `On ${hostOf(br.url)}` : "";
     openSheet("sheet-bapprove");
+    let left = HITL_S;
+    const tick = () => {
+      $("ba-count").textContent = `Echo won't do it unless you tap Go ahead · ${left} s`;
+      if (left-- <= 0) answerApproval("timeout");
+    };
+    clearInterval(approvalTimer);
+    approvalTimer = setInterval(tick, 1000);
+    tick();
     return new Promise((resolve) => { approvalResolve = resolve; });
   }
-  function answerApproval(yes) { const r = approvalResolve; approvalResolve = null; closeSheets(); if (r) r(yes); }
+  function answerApproval(answer) { clearInterval(approvalTimer); const r = approvalResolve; approvalResolve = null; closeSheets(); if (r) r(answer); }
   $("ba-yes").addEventListener("click", () => answerApproval(true));
   $("ba-no").addEventListener("click", () => answerApproval(false));
   $("scrim").addEventListener("click", () => { if (approvalResolve) answerApproval(false); });
+  const NOT_APPROVED = (answer) => (answer === "timeout"
+    ? "The user didn't approve within a minute, so it wasn't done. Don't try it again: carry on with the rest, and put it in the report as something for the user to do."
+    : "The user said no. Don't do this; find another way or carry on without it.");
 
   async function doAction(a) {
     const els = br.snap ? br.snap.elements : [];
@@ -2098,7 +2159,7 @@
         const unmark = highlight(e);
         if (needsApproval(a, e)) {
           const ok = await askApproval(`${a.args.why || "Continue"}: tap "${elLabel(e)}"`);
-          if (!ok || run.stopped) { unmark(); return "The user said no. Don't do this; ask them or finish."; }
+          if (ok !== true || run.stopped) { unmark(); return NOT_APPROVED(ok); }
         }
         const isLink = e.tagName === "A" && e.getAttribute("href") && !e.getAttribute("href").startsWith("#");
         const submits = !!(e.form || e.closest("form")) && (e.tagName === "BUTTON" || /^(submit|image)$/i.test(e.type || ""));
@@ -2114,12 +2175,12 @@
         e.value = a.args.text;
         e.dispatchEvent(new Event("input", { bubbles: true }));
         e.dispatchEvent(new Event("change", { bubbles: true }));
-        if (!a.args.submit) { unmark(); return `Typed "${tidy(a.args.text, 60)}".`; }
+        if (!a.args.submit) { unmark(); return `Typed "${tidy(a.args.text, 60)}"; the field now says "${tidy(e.value, 60)}".`; }
         const form = e.form || e.closest("form");
         if (!form) { unmark(); return "Typed it, but there's no form to send; click the page's button instead."; }
         if (needsApproval(a, e)) {
           const ok = await askApproval(`Send this form with "${tidy(a.args.text, 60)}"`);
-          if (!ok || run.stopped) { unmark(); return "The user said no. Don't send it; ask them or finish."; }
+          if (ok !== true || run.stopped) { unmark(); return NOT_APPROVED(ok); }
         }
         const result = await settle(() => (form.requestSubmit ? form.requestSubmit() : form.submit()));
         unmark();
@@ -2143,18 +2204,39 @@
         return `Showing part ${run.part} of the page.`;
       }
       case "ask_user": {
-        const answer = await askUser(a.args.question);
-        return answer == null ? "The user didn't answer." : `The user said: ${answer}`;
+        const r = await askHuman(a.args.question, { text: true, fallbackLabel: "Echo decides by itself" });
+        if (r.text) { run.userSaid = r.text; return `The user said: ${r.text}`; }
+        return "The user didn't answer within a minute. Decide yourself: choose the most sensible option, write which one in your memory, and carry on.";
       }
       default: return "That isn't something Echo can do here.";
     }
   }
 
-  // ----- Echo's turn -----
+  // ----- Echo's turn: plan, steps, report -----
+  // 1. Plan: the task as 3-8 checkable steps. 2. Each step in turn: one action
+  // at a time until Echo says it's done (with its result); a failed try starts
+  // the step again from where it began, up to 3 tries, then Echo asks you
+  // (retry, skip or stop; skip after a minute). 3. The report, from every
+  // step's result. Gemini's limits are waited out; Retry carries on after a failure.
+  const MAX_TRIES = 3, MAX_ACTIONS_PER_TRY = 12, MAX_ACTIONS = 90;
+  const MARK = { pending: "○", active: "●", done: "✓", failed: "✕", skipped: "↷" };
   function renderRun(title, line) {
     $("br-run").hidden = false;
     $("br-run-title").textContent = title;
     $("br-run-line").textContent = line;
+  }
+  function renderPlan(run) {
+    const ol = $("br-plan");
+    clear(ol);
+    if (!run || !run.plan) { ol.hidden = true; return; }
+    ol.hidden = false;
+    run.plan.steps.forEach((s) => {
+      const li = el("li", `bp-${s.status}`);
+      li.append(el("span", "bp-mark", MARK[s.status] || "○"), el("span", "grow", s.title));
+      if (s.status === "active" && s.attempts > 1) li.appendChild(el("span", "bp-try", `try ${s.attempts}/${MAX_TRIES}`));
+      ol.appendChild(li);
+      if (s.status === "active") setTimeout(() => { try { li.scrollIntoView({ block: "nearest" }); } catch { /* fine */ } }, 0);
+    });
   }
   function describeAction(a) {
     const el2 = br.snap && br.snap.elements[(a.args.index || 0) - 1];
@@ -2171,28 +2253,18 @@
       default: return "Working…";
     }
   }
-  let askResolve = null;
-  function askUser(question) {
-    renderRun("Echo needs you", question);
-    const ask = $("br-ask"), input = $("br-task");
-    ask.hidden = false; ask.dataset.mode = "answer";
-    input.placeholder = "Your answer"; input.value = "";
-    setTimeout(() => input.focus(), 50);
-    return new Promise((resolve) => { askResolve = resolve; });
-  }
   /**
-   * Gemini's free tier allows only a few requests a minute. A step that hits
-   * that limit (or a hiccup reaching the relay) waits and tries again, up to 3
-   * times, with a countdown; Take over stops the wait.
+   * Gemini's free tier allows only a few requests a minute. A request that hits
+   * that limit (or a hiccup reaching the relay) waits as long as Google says and
+   * tries again, up to 3 times, with a countdown; Take over stops the wait.
    */
   const RETRYABLE = (e) => !e.status || e.status >= 500 || ["minute", "busy"].includes(e.data && e.data.error);
-  async function stepWithRetry(run, payload) {
+  async function callBrowse(run, path, payload) {
     for (let attempt = 0; ; attempt++) {
-      try { return await cloudApi("/cloud/browse/step", payload, { signal: run.abort.signal }); }
+      try { return await cloudApi(path, payload, { signal: run.abort.signal }); }
       catch (e) {
         if (run.stopped || e.name === "AbortError" || attempt >= 3 || !RETRYABLE(e)) throw e;
         const limited = e.status === 429;
-        // Wait as long as Google says (when it says), a little more each time.
         const told = Number(e.data && e.data.retryAfter);
         const wait = limited ? Math.min(90, Math.max(5, Number.isFinite(told) && told > 0 ? told + 2 : 20) + attempt * 10) : 5;
         await countdown(run, wait, limited ? "Free tier: a few requests a minute" : "Echo couldn't be reached");
@@ -2211,7 +2283,55 @@
       tick();
     });
   }
-  /** `resume`: a run that failed, picked up where it stopped (its steps and notes kept). */
+  /** The plan as the relay needs it: no page elements, no per-try history. */
+  const wirePlan = (run) => ({ goal: run.plan.goal, report: run.plan.report, steps: run.plan.steps.map(({ title, doneWhen, status, result, lastFail }) => ({ title, doneWhen, status, result, lastFail })) });
+  const pageNow = (run) => {
+    br.snap = pageSnapshot();
+    const parts = Math.max(1, Math.ceil(br.snap.text.length / PART));
+    run.part = Math.min(run.part, parts);
+    return { url: br.url, title: br.title, text: br.snap.text.slice((run.part - 1) * PART, run.part * PART), part: run.part, parts };
+  };
+  /** One step: up to 3 tries, each from where the step began. Returns "done", "task_done", "failed" or "stopped". */
+  async function runStep(run, st) {
+    const total = run.plan.steps.length;
+    while (st.attempts < MAX_TRIES && !run.stopped) {
+      st.attempts++;
+      renderPlan(run);
+      if (st.attempts === 1 || !st.startUrl) st.startUrl = br.url;
+      else if (br.url !== st.startUrl) { renderRun(`Step ${run.cur + 1} of ${total} · try ${st.attempts}`, "Starting this step again"); await settle(() => goTo(st.startUrl)); }
+      st.history = [];
+      let why = "";
+      for (let k = 0; k < MAX_ACTIONS_PER_TRY && !run.stopped; k++) {
+        if (run.actions >= MAX_ACTIONS) { why = "The task took too many actions overall."; break; }
+        const d = await callBrowse(run, "/cloud/browse/step", {
+          task: run.task, plan: wirePlan(run), current: run.cur, attempt: st.attempts, lastFail: st.lastFail, memory: run.memory,
+          history: st.history.map(({ action, args, result }) => ({ action, args, result })), notes: run.notes, page: pageNow(run), userSaid: run.userSaid, context: { tz: localTz() },
+        });
+        if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
+        run.notes.push(...(d.notes || []));
+        for (const s2 of d.sources || []) if (!run.sources.some((x) => x.url === s2.url)) run.sources.push(s2);
+        const a = d.action;
+        if (a.args && a.args.memory) run.memory = a.args.memory;
+        if (run.stopped) return "stopped";
+        if (a.name === "step_done") { st.result = a.args.result; return "done"; }
+        if (a.name === "task_done") { st.result = a.args.result; return "task_done"; }
+        if (a.name === "step_failed") { why = a.args.why; break; }
+        renderRun(`Step ${run.cur + 1} of ${total}${st.attempts > 1 ? ` · try ${st.attempts}` : ""}`, describeAction(a));
+        const result = await doAction(a);
+        run.actions++;
+        // The same action a third time in this try, without getting anywhere: this way isn't working.
+        const sig = JSON.stringify([a.name, a.args.index, a.args.url, a.args.query, a.args.text, a.args.option]);
+        const repeats = st.history.filter((h) => h.sig === sig).length;
+        st.history.push({ action: a.name, args: a.args, result, sig });
+        if (a.name !== "read_more" && a.name !== "ask_user") run.part = ["click", "back", "open_url", "search"].includes(a.name) || (a.name === "type" && a.args.submit) ? 1 : run.part;
+        if (repeats >= 2) { why = `I did the same thing (${a.name}) three times without getting anywhere.`; break; }
+      }
+      if (run.stopped) return "stopped";
+      st.lastFail = why || `It took more than ${MAX_ACTIONS_PER_TRY} actions without finishing this step.`;
+    }
+    return run.stopped ? "stopped" : "failed";
+  }
+  /** `resume`: a run that stopped or failed, picked up at the step it reached (its plan, results and notes kept). */
   async function runEcho(task, resume = null) {
     if (!passValid()) return toast("Sign in once with your Mac online to use the Browser.", true);
     if (br.run) return toast("Echo is already on it. Tap Take over to stop.");
@@ -2219,74 +2339,95 @@
     try { await browserSession(); } catch (e) { return toast(cloudProblem(e), true); }
     const run = br.run = resume
       ? { ...resume, stopped: false, abort: new AbortController() }
-      : { task, steps: [], notes: [], sources: [], part: 1, stopped: false, abort: new AbortController() };
+      : { task, plan: null, cur: 0, memory: "", notes: [], sources: [], part: 1, actions: 0, userSaid: "", stopped: false, abort: new AbortController() };
+    if (resume && run.plan && run.plan.steps[run.cur]) { const st = run.plan.steps[run.cur]; st.attempts = 0; st.startUrl = null; }
     $("br-result").hidden = true;
     $("br-ask").hidden = true;
     $("br-panel").classList.add("running");
-    renderRun("Echo is browsing", resume ? `Carrying on from step ${run.steps.length + 1}…` : "Looking at the page…");
-    let answer = null, success = false, failed = false;
+    let text = null, failed = false;
     try {
-      while (!run.stopped) {
-        if (run.steps.length >= MAX_RUN_STEPS) { answer = `I stopped after ${MAX_RUN_STEPS} steps without finishing.`; break; }
-        br.snap = pageSnapshot();
-        const parts = Math.max(1, Math.ceil(br.snap.text.length / PART));
-        run.part = Math.min(run.part, parts);
-        const text = br.snap.text.slice((run.part - 1) * PART, run.part * PART);
-        const d = await stepWithRetry(run, {
-          task: run.task, page: { url: br.url, title: br.title, text, part: run.part, parts }, steps: run.steps, notes: run.notes, context: { tz: localTz() },
+      if (!run.plan) {
+        renderRun("Echo is planning", "Working out the steps…");
+        const page = pageNow(run);
+        const d = await callBrowse(run, "/cloud/browse/plan", { task, page: { url: page.url, title: page.title, text: page.text.slice(0, 3000) }, context: { tz: localTz() } });
+        run.plan = { ...d.plan, steps: d.plan.steps.map((s) => ({ ...s, status: "pending", attempts: 0, result: "", lastFail: "", history: [] })) };
+      }
+      renderPlan(run);
+      while (!run.stopped && run.cur < run.plan.steps.length) {
+        const st = run.plan.steps[run.cur];
+        st.status = "active";
+        renderPlan(run);
+        const outcome = await runStep(run, st);
+        if (outcome === "stopped" || run.stopped) break;
+        if (outcome === "done") { st.status = "done"; run.cur++; continue; }
+        if (outcome === "task_done") {
+          st.status = "done";
+          for (const rest of run.plan.steps.slice(run.cur + 1)) rest.status = "skipped";
+          run.cur = run.plan.steps.length;
+          break;
+        }
+        // Three tries didn't do it: the human in the loop decides, or Echo skips it after a minute.
+        st.status = "failed";
+        renderPlan(run);
+        const r = await askHuman(`Step ${run.cur + 1} didn't work after ${MAX_TRIES} tries. ${st.lastFail}`, {
+          choices: [{ id: "retry", label: "Try again", primary: true }, { id: "skip", label: "Skip it" }, { id: "stop", label: "Stop and report" }],
+          fallback: "skip", fallbackLabel: "Echo skips it and carries on", text: true,
         });
-        if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
-        run.notes.push(...(d.notes || []));
-        for (const s2 of d.sources || []) if (!run.sources.some((x) => x.url === s2.url)) run.sources.push(s2);
         if (run.stopped) break;
-        const a = d.action;
-        if (a.name === "done") { answer = a.args.answer; success = a.args.success; break; }
-        renderRun(`Echo is browsing · step ${run.steps.length + 1}`, describeAction(a));
-        const result = await doAction(a);
-        if (a.name !== "read_more") run.part = a.name === "click" || a.name === "back" || a.name === "open_url" || a.name === "search" || (a.name === "type" && a.args.submit) ? 1 : run.part;
-        run.steps.push({ action: a.name, args: a.args, result });
+        if (r.text) { run.userSaid = r.text; st.lastFail = `The user said: ${r.text}`; st.attempts = 0; st.status = "active"; continue; }
+        if (r.id === "retry") { st.attempts = 0; st.status = "active"; continue; }
+        if (r.id === "stop") { for (const rest of run.plan.steps.slice(run.cur + 1)) rest.status = "skipped"; run.cur = run.plan.steps.length; break; }
+        st.status = "skipped";
+        run.cur++;
+      }
+      if (!run.stopped) {
+        renderPlan(run);
+        renderRun("Echo is writing the report", "Putting every step's results together…");
+        const d = await callBrowse(run, "/cloud/browse/report", { task: run.task, plan: wirePlan(run), notes: run.notes, sources: run.sources, context: { tz: localTz() } });
+        text = d.report;
       }
     } catch (e) {
-      if (!run.stopped && e.name !== "AbortError") {
-        failed = true;
-        answer = e.status ? cloudProblem(e) : "Something went wrong while browsing.";
-      }
+      if (!run.stopped && e.name !== "AbortError") { failed = true; text = e.status ? cloudProblem(e) : "Something went wrong while browsing."; }
     }
-    finishRun(run, answer, success, failed);
+    if (!run.stopped) finishRun(run, text, { failed });
   }
-  function finishRun(run, answer, success, failed = false) {
+  function finishRun(run, text, { failed = false, tookOver = false } = {}) {
     if (br.run !== run) return;
     br.run = null;
+    closeHitl({ id: null, text: "", timedOut: false });
     $("br-panel").classList.remove("running");
     $("br-run").hidden = true;
+    $("br-plan").hidden = true;
     const ask = $("br-ask"); ask.hidden = false; ask.dataset.mode = ""; $("br-task").placeholder = "Ask Echo to do something here";
-    if (run.stopped || answer == null) return;
     const box = $("br-result");
     clear(box);
     box.hidden = false;
+    const steps = run.plan ? run.plan.steps : [];
+    const count = (st) => steps.filter((s) => s.status === st).length;
     const head = el("div", "row-i br-result-head");
-    head.append(el("b", "grow", failed ? "Echo couldn't go on" : success ? "Echo finished" : "Echo stopped"));
+    head.append(el("b", "grow", tookOver ? "You took over" : failed ? "Echo couldn't go on" : "Echo's report"));
     const close = el("button", "glass small-pill", "Close"); close.addEventListener("click", () => { box.hidden = true; });
     head.appendChild(close);
-    box.append(head, el("p", "br-answer", answer));
-    if (failed || !success) {
-      // Failed (Gemini's limit, no connection): carry on from the step it reached.
-      // Echo gave up by itself: start the task again.
-      const again = el("button", "cta big-btn br-retry", failed ? `Retry${run.steps.length ? ` from step ${run.steps.length + 1}` : ""}` : "Try again");
-      again.addEventListener("click", () => { box.hidden = true; runEcho(run.task, failed ? run : null); });
+    box.appendChild(head);
+    if (steps.length) box.appendChild(el("p", "fine", `${MARK.done} ${count("done")} of ${steps.length} steps done${count("skipped") ? ` · ${MARK.skipped} ${count("skipped")} skipped` : ""}${count("failed") ? ` · ${MARK.failed} ${count("failed")} failed` : ""}`));
+    box.appendChild(el("p", "br-answer", tookOver ? "Echo kept its plan and what it found. Carry on yourself, or let Echo continue from where it stopped." : text || "Done."));
+    if (failed || tookOver) {
+      const n = Math.min(run.cur + 1, steps.length || 1);
+      const again = el("button", "cta big-btn br-retry", run.plan ? `${tookOver ? "Continue" : "Retry"} from step ${n}` : "Retry");
+      again.addEventListener("click", () => { box.hidden = true; runEcho(run.task, run); });
       box.appendChild(again);
-      if (failed && run.steps.length) box.appendChild(el("p", "fine", `${run.steps.length} step${run.steps.length === 1 ? "" : "s"} done so far are kept.`));
+      if (run.plan && count("done")) box.appendChild(el("p", "fine", `The ${count("done")} finished step${count("done") === 1 ? " is" : "s are"} kept.`));
     }
     if (run.sources.length) {
       const srcs = el("div", "srcs");
       for (const s2 of run.sources.slice(0, 4)) { const l = el("button", "glass small-pill", s2.title); l.addEventListener("click", () => goTo(s2.url)); srcs.appendChild(l); }
       box.appendChild(srcs);
     }
-    if (failed) return; // only finished tasks go to the chat
-    // The chat keeps it too (and the Mac gets it with Phone mode's other messages).
+    if (failed || tookOver) return; // only finished tasks go to the chat
+    // The chat keeps the report too (and the Mac gets it with Phone mode's other messages).
     const at = Date.now();
     putMessage({ k: newKey(), at, from: "you", text: `🌐 ${run.task}`, kind: "text", src: "phone" });
-    putMessage({ k: newKey(), at: at + 1, from: "echo", text: answer, kind: "text", src: "phone", sources: run.sources.slice(0, 4) });
+    putMessage({ k: newKey(), at: at + 1, from: "echo", text: text || "Done.", kind: "text", src: "phone", sources: run.sources.slice(0, 4) });
     syncToMac();
   }
   function takeOver() {
@@ -2295,8 +2436,10 @@
     run.stopped = true;
     run.abort.abort();
     if (approvalResolve) answerApproval(false);
-    if (askResolve) { const r = askResolve; askResolve = null; r(null); }
-    finishRun(run, null, false);
+    closeHitl({ id: "stop", text: "", timedOut: false });
+    const st = run.plan && run.plan.steps[run.cur];
+    if (st && st.status === "active") st.status = "pending";
+    finishRun(run, null, { tookOver: true });
     toast("You're in control.");
   }
   $("br-takeover").addEventListener("click", takeOver);
@@ -2308,12 +2451,9 @@
     const text = brTask.value.trim();
     if (!text) return;
     brTask.value = ""; brTask.style.height = "40px"; brTask.blur();
-    if ($("br-ask").dataset.mode === "answer" && askResolve) {
-      const r = askResolve; askResolve = null;
-      $("br-ask").hidden = true; $("br-ask").dataset.mode = "";
-      $("br-task").placeholder = "Ask Echo to do something here";
+    if ($("br-ask").dataset.mode === "answer" && hitl) {
       renderRun("Echo is browsing", "Carrying on…");
-      r(text);
+      closeHitl({ id: "text", text, timedOut: false });
       return;
     }
     runEcho(text);

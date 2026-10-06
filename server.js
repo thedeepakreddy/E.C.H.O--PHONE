@@ -21,6 +21,7 @@
  *   UPSTASH_REDIS_REST_TOKEN
  *   QSTASH_TOKEN               the 5-minute tick (QSTASH_URL if the console shows one)
  *   GEMINI_EMBED_MODEL         search by meaning in saved memory (default gemini-embedding-001)
+ *   GEMINI_BROWSE_MODEL        Echo's browsing (default: the best Flash model the key can use)
  *
  * Phone mode is reached with a cloud pass that Echo on the Mac signs at sign-in
  * (lib/secure.js), so the relay can trust it while the Mac is off. It can never
@@ -36,7 +37,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveKeys, verifyPass, seal, unseal } from "./lib/secure.js";
 import { createStore } from "./lib/store.js";
-import { createGemini } from "./lib/gemini.js";
+import { createGemini, pickBrowseModel } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
 import { ensureSchedule } from "./lib/tick.js";
@@ -704,11 +705,17 @@ export function createRelay({
           await store.set(`jar:${device}`, e.jar, 30 * 86400).catch(() => {});
           return send(res, 200, { ok: true });
         }
-        if (path === "/cloud/browse/step") {
+        if (path === "/cloud/browse/plan" || path === "/cloud/browse/step" || path === "/cloud/browse/report") {
           if (!cloud) return send(res, 503, { error: "setup", message: "Echo's browsing needs Phone mode's brain: add GEMINI_API_KEY on Render." });
           if (rateLimited(device)) return send(res, 429, { error: "busy", message: "Slow down a little — too many requests this minute." });
-          const body = await readJson(req, CLOUD_BODY);
-          return send(res, 200, await cloud.browseStep({ task: body.task, page: body.page, steps: body.steps, notes: body.notes, context: body.context ?? {} }));
+          const b = await readJson(req, CLOUD_BODY);
+          const context = b.context ?? {};
+          if (path === "/cloud/browse/plan") return send(res, 200, await cloud.browsePlan({ task: b.task, page: b.page, context }));
+          if (path === "/cloud/browse/report") return send(res, 200, await cloud.browseReport({ task: b.task, plan: b.plan, notes: b.notes, sources: b.sources, context }));
+          return send(res, 200, await cloud.browseStep({
+            task: b.task, plan: b.plan, current: b.current, attempt: b.attempt, lastFail: b.lastFail, memory: b.memory,
+            history: b.history, notes: b.notes, page: b.page, userSaid: b.userSaid, context,
+          }));
         }
       } catch (e) {
         if (e?.input) return send(res, 400, { error: "input", message: e.message });
@@ -1076,6 +1083,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200, snaps: Number(env.PHONE_DAILY_SNAPS) || 30, browseSteps: Number(env.PHONE_DAILY_BROWSE) || 300 },
   });
   console.log(`Phone mode: brain ${gemini ? gemini.model : "off (no GEMINI_API_KEY)"}, store ${store.remote ? "Upstash" : "memory only (no UPSTASH_REDIS_REST_URL/TOKEN)"}`);
+  // Browsing uses a stronger model with its own free quota: GEMINI_BROWSE_MODEL, or the best Flash model this key has.
+  if (gemini) {
+    const chosen = String(env.GEMINI_BROWSE_MODEL ?? "").trim();
+    if (chosen) { gemini.browseModel = chosen; console.log(`Browsing: ${chosen} (GEMINI_BROWSE_MODEL)`); }
+    else gemini.listModels()
+      .then((names) => { gemini.browseModel = pickBrowseModel(names, gemini.model); console.log(`Browsing: ${gemini.browseModel ?? gemini.model}${gemini.browseModel ? "" : " (no other Flash model on this key)"}`); })
+      .catch((e) => console.log(`Browsing: ${gemini.model} (couldn't list models: ${e?.message ?? e})`));
+  }
   if (paired && env.QSTASH_TOKEN) {
     ensureSchedule({ qstashToken: env.QSTASH_TOKEN.trim(), qstashUrl: env.QSTASH_URL?.trim() || undefined, publicUrl: env.RENDER_EXTERNAL_URL, cronToken: keys.cron })
       .then((r) => console.log(r.ok ? "Tick: every 5 minutes via QStash" : `Tick: not scheduled (${r.reason})`))

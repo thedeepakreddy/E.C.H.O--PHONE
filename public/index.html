@@ -194,6 +194,12 @@
     <div class="br-start" id="br-start"></div>
   </div>
   <div class="glass br-panel" id="br-panel">
+    <ol class="br-plan" id="br-plan" hidden></ol>
+    <div class="br-hitl" id="br-hitl" hidden>
+      <p class="br-q" id="br-q"></p>
+      <div class="br-choices" id="br-choices"></div>
+      <p class="br-count" id="br-count"></p>
+    </div>
     <div class="br-run" id="br-run" hidden>
       <span class="br-spin" aria-hidden="true"></span>
       <div class="grow"><b id="br-run-title">Echo is browsing</b><span class="sub small clamp2" id="br-run-line">Starting…</span></div>
@@ -384,7 +390,7 @@
   <div class="row-i gap14"><span class="warn-badge lg" aria-hidden="true"><svg class="i26" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg></span>
     <div><h2 id="ba-title">Echo wants to go ahead</h2><p class="sub small" id="ba-host"></p></div></div>
   <p class="ba-what" id="ba-what"></p>
-  <p class="sub small">This can't be undone from here. Echo waits until you choose.</p>
+  <p class="sub small" id="ba-count">Echo won't do it unless you tap Go ahead.</p>
   <div class="btns2"><button class="glass big-btn" id="ba-no">Don't</button><button class="cta big-btn" id="ba-yes">Go ahead</button></div>
 </section>
 <section class="glass sheet" id="sheet-bmore" role="dialog" aria-modal="true" aria-label="Browser" hidden>
