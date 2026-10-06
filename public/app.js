@@ -691,6 +691,7 @@
     text = String(text).trim();
     if (!text) return;
     restoreInput("");
+    input.placeholder = "Message";
     if (mode === "phone") return sendCloud(text);
     try {
       const d = await api("/chat", { json: { text } });
@@ -718,7 +719,8 @@
   function cloudContext() {
     const pl = place();
     const tz = localTz();
-    return { tz, city: pl && pl.name !== "Current location" ? pl.name : undefined, lat: pl ? pl.lat : undefined, lon: pl ? pl.lon : undefined, shortcuts: shortcutList() };
+    return { tz, city: pl && pl.name !== "Current location" ? pl.name : undefined, lat: pl ? pl.lat : undefined, lon: pl ? pl.lon : undefined, shortcuts: shortcutList(),
+      ...(snapCtx && snapCtx.until > Date.now() ? { snap: snapCtx.snap } : {}) };
   }
   function setCloudBusy(on) {
     cloudBusy = on;
@@ -1160,6 +1162,194 @@
     }
   });
   $("version-line").textContent = `Echo Remote ${VERSION}`;
+
+  // ---------- Snap & act ----------
+  // Photograph a bill, receipt, ticket, letter, menu or product: Echo reads it
+  // (one request), shows what it found, and offers the next step. The photo is
+  // shrunk here (which also drops its location data) and never kept anywhere.
+  let snapState = null, snapCtx = null, snapTimer = 0;
+  const snapFile = $("snap-file");
+  const KIND = { bill: "Bill", receipt: "Receipt", event: "Event", letter: "Letter", menu: "Menu", product: "Product", other: "Photo" };
+  const CATS = ["Groceries", "Dining", "Transport", "Shopping", "Utilities", "Health", "Entertainment", "Travel", "Other"];
+  const FIELDS = {
+    bill: [["amount", "Amount", "number"], ["currency", "Currency", "text"], ["dueDate", "Due", "date"], ["payee", "Pay to", "text"]],
+    receipt: [["amount", "Total", "number"], ["currency", "Currency", "text"], ["merchant", "Shop", "text"], ["purchaseDate", "Date", "date"], ["category", "Category", "cat"]],
+    event: [["eventTitle", "Event", "text"], ["eventStart", "Starts", "datetime-local"], ["eventEnd", "Ends", "datetime-local"], ["location", "Place", "text"]],
+    letter: [["sender", "From", "text"]],
+    product: [["productName", "Product", "text"], ["price", "Price", "number"], ["currency", "Currency", "text"]],
+  };
+  function money(amount, currency) {
+    if (amount == null) return "";
+    try { if (currency) return new Intl.NumberFormat([], { style: "currency", currency, maximumFractionDigits: 2 }).format(amount); } catch { /* unknown code */ }
+    return `${amount.toLocaleString()}${currency ? ` ${currency}` : ""}`;
+  }
+  function openSnap() {
+    if (!passValid()) return toast("Sign in once with your Mac online to use Snap.", true);
+    snapFile.value = "";
+    snapFile.click();
+  }
+  $("act-screen").addEventListener("click", () => (mode === "phone" ? openSnap() : show("screen")));
+  $("snap-chat").addEventListener("click", () => openSnap());
+  $("snap-again").addEventListener("click", () => openSnap());
+  snapFile.addEventListener("change", () => { const f = snapFile.files && snapFile.files[0]; if (f) readSnap(f); });
+  async function shrink(file) {
+    let pic;
+    try { pic = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+    catch {
+      pic = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = () => reject(new Error("That photo couldn't be opened.")); img.src = URL.createObjectURL(file); });
+    }
+    const k = Math.min(1, 1600 / Math.max(pic.width, pic.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(pic.width * k); c.height = Math.round(pic.height * k);
+    c.getContext("2d").drawImage(pic, 0, 0, c.width, c.height);
+    const blob = await new Promise((resolve) => c.toBlob(resolve, "image/jpeg", 0.82));
+    if (!blob) throw new Error("That photo couldn't be prepared.");
+    return blob;
+  }
+  async function readSnap(file) {
+    show("snap");
+    if (snapState && snapState.url) URL.revokeObjectURL(snapState.url);
+    snapState = { busy: true };
+    renderSnap();
+    try {
+      const blob = await shrink(file);
+      snapState.url = URL.createObjectURL(blob);
+      renderSnap();
+      const d = await cloudApi("/cloud/snap", { image: toBase64(await blob.arrayBuffer()), context: cloudContext() });
+      Object.assign(snapState, { busy: false, result: d.snap, actions: d.actions || [] });
+      if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
+    } catch (e) {
+      Object.assign(snapState, { busy: false, error: e.status ? cloudProblem(e) : e.message || "That didn't work. Try again." });
+    }
+    renderSnap();
+  }
+  function snapLines(r) {
+    const out = [`${r.title}: ${r.summary}`];
+    for (const [k, label] of [...(FIELDS[r.kind] || []), ["account", "Account"]]) if (r[k] != null && r[k] !== "") out.push(`${label}: ${r[k]}`);
+    for (const d of r.deadlines || []) out.push(`Deadline: ${d.date} — ${d.what}`);
+    if (r.text) out.push(`Text: ${r.text}`);
+    return out.join("\n");
+  }
+  function renderSnap() {
+    const box = $("snap-body");
+    clear(box);
+    const st = snapState || {};
+    if (st.url) { const img = el("img", "snap-photo"); img.src = st.url; img.alt = "Your photo"; box.appendChild(img); }
+    if (st.busy) { const c = el("section", "glass bcard"); c.appendChild(el("p", "snap-busy", st.url ? "Reading your photo…" : "Preparing your photo…")); box.appendChild(c); }
+    else if (st.error || (st.result && !st.result.readable)) {
+      const c = el("section", "glass bcard");
+      c.append(el("p", "", st.error || "I couldn't read that. Try closer, flatter, with more light."));
+      const again = el("button", "cta big-btn", "Try another photo"); again.addEventListener("click", openSnap);
+      c.appendChild(again); box.appendChild(c);
+    } else if (st.result) {
+      const r = st.result;
+      const c = el("section", "glass bcard");
+      c.append(el("span", "snap-kind", KIND[r.kind] || "Photo"), el("div", "snap-title", r.title), el("p", "sub small", r.summary));
+      const fields = el("div", "snap-fields");
+      for (const [key, label, type] of FIELDS[r.kind] || []) {
+        const id = `sf-${key}`;
+        const lab = el("label", "", label); lab.htmlFor = id;
+        let input;
+        if (type === "cat") {
+          input = el("select");
+          for (const cat of CATS) { const o = el("option", "", cat); o.value = cat; input.appendChild(o); }
+          input.value = r.category || "Other";
+        } else {
+          input = el("input"); input.type = type; input.value = r[key] ?? "";
+          if (type === "number") { input.inputMode = "decimal"; input.step = "any"; }
+          if (key === "currency") { input.maxLength = 3; input.autocapitalize = "characters"; }
+        }
+        input.id = id;
+        input.addEventListener("input", () => {
+          const v = input.value.trim();
+          r[key] = type === "number" ? (v === "" ? null : Number(v)) : key === "currency" ? (v.toUpperCase() || null) : (v || null);
+          clearTimeout(snapTimer);
+          snapTimer = setTimeout(refreshSnapActions, 450);
+        });
+        fields.append(lab, input);
+      }
+      if (r.account) fields.append(el("label", "", "Account"), el("span", "", `ends ${r.account}`));
+      for (const d of r.deadlines || []) fields.append(el("label", "", "Deadline"), el("span", "", `${d.date} — ${d.what}`));
+      if (fields.childNodes.length) c.appendChild(fields);
+      box.appendChild(c);
+      if (r.translation) box.appendChild(bcard(`In English${r.language ? `, from ${r.language}` : ""}`, el("p", "small", r.translation)));
+      const acts = el("div", "snap-acts"); acts.id = "snap-acts";
+      box.appendChild(acts);
+      renderSnapActions();
+    } else {
+      const c = el("section", "glass bcard");
+      c.append(el("p", "", "Photograph a bill, receipt, ticket, letter, menu or price tag. Echo reads it and offers the next step."));
+      const go = el("button", "cta big-btn", "Take or choose a photo"); go.addEventListener("click", openSnap);
+      c.appendChild(go); box.appendChild(c);
+    }
+    const exp = el("section", "glass bcard"); exp.id = "snap-expenses"; box.appendChild(exp);
+    loadExpenses();
+  }
+  function renderSnapActions() {
+    const acts = $("snap-acts");
+    if (!acts || !snapState || !snapState.actions) return;
+    clear(acts);
+    snapState.actions.forEach((a, i) => {
+      const day = (local) => { const d = new Date(local); return isNaN(d) ? local : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }); };
+      const label = a.type === "reminder" && /^Remind me (on|today)/.test(a.label) ? `Remind me ${day(a.data.start)}, 9:00` : a.label;
+      const done = a.done && a.type === "expense" ? `Saved · ${money(a.data.amount, a.data.currency)}` : a.done ? `Reminder set · ${eventWhen(a.data.start)}` : label;
+      const btn = el("button", `${i === 0 ? "cta" : "glass"} big-btn${a.done ? " done" : ""}`, done);
+      btn.addEventListener("click", () => runSnapAction(a, btn));
+      acts.appendChild(btn);
+    });
+  }
+  async function refreshSnapActions() {
+    if (!snapState || !snapState.result) return;
+    try {
+      const d = await cloudApi("/cloud/snap/actions", { snap: snapState.result, tz: localTz() });
+      snapState.actions = d.actions;
+      renderSnapActions();
+    } catch { /* the old buttons stay */ }
+  }
+  async function runSnapAction(a, btn) {
+    if (a.type === "calendar" || a.type === "reminder" || a.type === "mac") return runAction(a, btn);
+    if (a.type === "expense") {
+      if (a.done) return toast("Already saved.");
+      btn.setAttribute("aria-busy", "true");
+      try {
+        await cloudApi("/cloud/expenses", { expense: a.data, tz: localTz() });
+        a.done = true;
+        btn.textContent = `Saved · ${money(a.data.amount, a.data.currency)}`;
+        toast(`Saved: ${money(a.data.amount, a.data.currency)} · ${a.data.category}`);
+        loadExpenses();
+      } catch (e) { toast(cloudProblem(e), true); }
+      finally { btn.removeAttribute("aria-busy"); }
+      return;
+    }
+    if (a.type === "ask") {
+      const r = snapState.result;
+      snapCtx = { snap: r, until: Date.now() + 15 * 60_000 };
+      show("chat");
+      if (!a.data.prompt) { input.placeholder = "Ask about your photo"; input.focus(); return; }
+      // Phone mode carries the photo's details itself; the Mac gets them in the message.
+      sendChat(mode === "phone" ? a.data.prompt : `${a.data.prompt}\n\n(About a photo I took — ${snapLines(r)})`);
+    }
+  }
+  async function loadExpenses() {
+    const box = $("snap-expenses");
+    if (!box || !passValid()) return;
+    try {
+      const d = await cloudApi("/cloud/expenses");
+      clear(box);
+      box.appendChild(el("h3", "", "This month"));
+      const totals = Object.entries(d.totals || {}).map(([c, v]) => money(v, c === "?" ? null : c)).join(" + ");
+      box.appendChild(el("div", "big", totals || "No expenses yet"));
+      if (d.count) box.appendChild(el("p", "fine", `${d.count} expense${d.count === 1 ? "" : "s"} saved from snaps`));
+      for (const x of (d.items || []).slice(0, 5)) {
+        const row = el("div", "exp-row");
+        row.append(el("span", "t", x.date.slice(5)), el("span", "grow", `${x.merchant} · ${x.category}`), el("b", "", money(x.amount, x.currency)));
+        const del = el("button", "", "✕"); del.setAttribute("aria-label", `Delete ${x.merchant}`);
+        del.addEventListener("click", async () => { try { await cloudApi("/cloud/expenses/delete", { id: x.id }); loadExpenses(); } catch (e) { toast(cloudProblem(e), true); } });
+        row.appendChild(del);
+        box.appendChild(row);
+      }
+    } catch { box.hidden = true; }
+  }
 
   // ---------- morning briefing and notifications ----------
   function renderBriefSettings() {

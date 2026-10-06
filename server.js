@@ -39,7 +39,8 @@ import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
 import { ensureSchedule } from "./lib/tick.js";
 import { vapidKeys, sendPush, validSubscription } from "./lib/push.js";
-import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick } from "./lib/briefing.js";
+import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick, localParts, validTz } from "./lib/briefing.js";
+import { MAX_IMAGE_B64, cleanExpense, monthTotals, recheckSnap, snapActions } from "./lib/snap.js";
 
 export const POLL_MS = 25_000;          // how long Echo's "anything for me?" is held open
 export const REQUEST_MS = 30_000;       // how long a phone request may wait for Echo's answer
@@ -74,6 +75,7 @@ const FORWARDED = new Set([
 export const CLOUD_RATE = 30;
 export const CLOUD_BODY = 256 * 1024;
 export const CLOUD_VOICE_BODY = 4 * 1024 * 1024;
+export const MAX_EXPENSES = 500;
 /** How long a calendar link from Phone mode keeps working. */
 export const ICS_TTL_MS = 30 * 86400_000;
 
@@ -158,7 +160,7 @@ export function createRelay({
     phonesLock = run.catch(() => {});
     return run;
   }
-  const deviceOf = (phones, id) => (phones.devices[id] ??= { sub: null, prefs: { ...DEFAULT_PREFS }, lastBrief: "", reminders: [] });
+  const deviceOf = (phones, id) => (phones.devices[id] ??= { sub: null, prefs: { ...DEFAULT_PREFS }, lastBrief: "", reminders: [], expenses: [] });
   const push = (sub, message) => sendPush(sub, message, { vapid, contact: publicUrl, fetchImpl: pushFetch, now: now() });
   const briefingTools = { weather: getWeather, worldRaw: async () => (await getWorld()).raw };
   let ticking = null;
@@ -442,6 +444,12 @@ export function createRelay({
         const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
         return send(res, 200, { prefs: dev.prefs, subscribed: Boolean(dev.sub), latest: await store.get(`brief:${device}`).catch(() => null) });
       }
+      if (path === "/cloud/expenses") {
+        const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
+        const tz = validTz(dev.prefs?.tz) ? dev.prefs.tz : "UTC";
+        const month = /^\d{4}-\d{2}$/.test(String(new URL(req.url, "http://x").searchParams.get("month"))) ? new URL(req.url, "http://x").searchParams.get("month") : localParts(now(), tz).date.slice(0, 7);
+        return send(res, 200, monthTotals(dev.expenses ?? [], month));
+      }
       if (path === "/cloud/reminders") {
         const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
         return send(res, 200, { reminders: (dev.reminders ?? []).filter((r) => !r.sent).sort((x, y) => x.at - y.at) });
@@ -449,7 +457,7 @@ export function createRelay({
       return send(res, 404, "Not found");
     }
     if (req.method !== "POST") return send(res, 404, "Not found");
-    if (path.startsWith("/cloud/push/") || path.startsWith("/cloud/briefing") || path.startsWith("/cloud/reminders")) {
+    if (path.startsWith("/cloud/push/") || path.startsWith("/cloud/briefing") || path.startsWith("/cloud/reminders") || path.startsWith("/cloud/expenses")) {
       try {
         const body = await readJson(req, 16 * 1024);
         if (path === "/cloud/push/subscribe") {
@@ -483,6 +491,20 @@ export function createRelay({
           const r = await withPhones((phones) => addReminder(deviceOf(phones, device), body, now(), randomUUID().slice(0, 8)));
           return send(res, 200, { reminder: r });
         }
+        if (path === "/cloud/expenses") {
+          const tz = validTz(body.tz) ? body.tz : "UTC";
+          const expense = await withPhones((phones) => {
+            const d = deviceOf(phones, device);
+            const x = { id: randomUUID().slice(0, 8), ...cleanExpense(body.expense, localParts(now(), tz).date) };
+            d.expenses = [...(d.expenses ?? []), x].slice(-MAX_EXPENSES);
+            return x;
+          });
+          return send(res, 200, { expense });
+        }
+        if (path === "/cloud/expenses/delete") {
+          await withPhones((phones) => { const d = deviceOf(phones, device); d.expenses = (d.expenses ?? []).filter((x) => x.id !== body.id); });
+          return send(res, 200, { ok: true });
+        }
         if (path === "/cloud/reminders/cancel") {
           await withPhones((phones) => { const d = deviceOf(phones, device); d.reminders = (d.reminders ?? []).filter((r) => r.id !== body.id); });
           return send(res, 200, { ok: true });
@@ -502,6 +524,29 @@ export function createRelay({
         const { event } = await readJson(req, 16 * 1024);
         if (!validEvent(event)) return send(res, 400, { error: "input", message: "That event is missing a title or time." });
         return send(res, 200, { url: icsUrl(event) });
+      } catch (e) { return sendCloudError(res, e); }
+    }
+    if (path === "/cloud/snap/actions") {
+      // The user corrected a field: the buttons are made again from the corrected snap. No AI call.
+      try {
+        const body = await readJson(req, 64 * 1024);
+        const tz = validTz(body.tz) ? body.tz : "UTC";
+        const snap = recheckSnap(body.snap);
+        const actions = snapActions(snap, { today: localParts(now(), tz).date });
+        for (const a of actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
+        return send(res, 200, { snap, actions });
+      } catch (e) { return sendCloudError(res, e); }
+    }
+    if (path === "/cloud/snap") {
+      if (!cloud) return send(res, 503, { error: "setup", message: "Snap needs Phone mode's brain: add GEMINI_API_KEY on Render." });
+      if (rateLimited(claims.device)) return send(res, 429, { error: "busy", message: "Slow down a little — too many requests this minute." });
+      try {
+        const body = await readJson(req, CLOUD_VOICE_BODY);
+        const image = String(body.image ?? "");
+        if (image.length > MAX_IMAGE_B64 || !/^[A-Za-z0-9+/=]{1000,}$/.test(image)) return send(res, 400, { error: "input", message: "That photo didn't come through. Try again." });
+        const result = await cloud.snap({ image, context: body.context ?? {} });
+        for (const a of result.actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
+        return send(res, 200, result);
       } catch (e) { return sendCloudError(res, e); }
     }
     if (path === "/cloud/chat" || path === "/cloud/voice") {
@@ -608,7 +653,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const gemini = paired && env.GEMINI_API_KEY ? createGemini({ apiKey: env.GEMINI_API_KEY.trim(), model: (env.GEMINI_MODEL || "gemini-3.1-flash-lite").trim(), base: env.GEMINI_BASE || undefined }) : null;
   const relay = createRelay({
     secret: relaySecret, store, gemini, publicUrl: env.RENDER_EXTERNAL_URL || "https://echo-phone.onrender.com",
-    limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200 },
+    limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200, snaps: Number(env.PHONE_DAILY_SNAPS) || 30 },
   });
   console.log(`Phone mode: brain ${gemini ? gemini.model : "off (no GEMINI_API_KEY)"}, store ${store.remote ? "Upstash" : "memory only (no UPSTASH_REDIS_REST_URL/TOKEN)"}`);
   if (paired && env.QSTASH_TOKEN) {

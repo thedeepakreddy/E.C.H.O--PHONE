@@ -99,6 +99,25 @@ Turn on **Settings → Morning briefing → Briefing and reminders** in the Home
 
 Notifications are encrypted end to end (Web Push, RFC 8291). The relay's notification key is derived from `RELAY_SECRET`, so there's nothing extra to configure. Timed work runs every minute while the relay is awake, and QStash wakes it every 5 minutes while the Mac is off.
 
+### Snap & act
+
+Tap **Snap** on Home (in Phone mode) or the camera in Chat. Take or choose a photo of a bill, receipt, ticket, letter, menu or price tag. Echo reads it in one request and shows what it found; you can correct any field. The buttons depend on what it is:
+
+| Photo | Buttons |
+| --- | --- |
+| Bill | Remind me 2 days before it's due · Add the due date to Calendar · Save as expense |
+| Receipt | Save as expense |
+| Event | Add to Calendar · Remind me the day before |
+| Letter | A reminder before its deadline · What do I need to do? · File it on my Mac |
+| Product | Find it cheaper |
+
+Foreign-language text comes with an English translation. Expenses add up by month on the Snap page.
+
+How it's kept safe:
+- The photo is shrunk on the phone (which drops its location data), sent for that one read, and never stored.
+- The buttons are made from the checked fields, never from text in the photo.
+- Snap has its own daily cap: `PHONE_DAILY_SNAPS`, default 30.
+
 ## Notes
 
 - **Free plan.** Render's free services sleep after 15 minutes without traffic. While Echo runs, its polling keeps the relay awake. If the Mac has been off, the first open takes about a minute while Render wakes up. One always-on service uses about 744 of the 750 free hours a month.

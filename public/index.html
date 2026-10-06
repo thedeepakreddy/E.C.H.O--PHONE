@@ -84,7 +84,7 @@
     <div class="actions">
       <button class="act" id="act-listen" aria-pressed="false"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></span>Listen</button>
       <button class="act" id="act-stop"><span class="bubble b58"><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg></span>Stop</button>
-      <button class="act" data-open="screen"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>Screen</button>
+      <button class="act" id="act-screen"><span class="bubble b58"><svg class="i22 mac-only" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><svg class="i22 phone-only" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span><span class="mac-only">Screen</span><span class="phone-only">Snap</span></button>
       <button class="act" data-open="brain"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3V17a3 3 0 0 0 6 0V4zM12 4a4 4 0 0 1 4 4 3.5 3.5 0 0 1 2 6.3V17a3 3 0 0 1-6 0"/></svg></span>Brain</button>
       <button class="act" id="act-neural"><span class="bubble b58"><svg class="i22 mac-only" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7h8M7 8l4 8M17 9l-4 7"/></svg><svg class="i22 phone-only" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg></span><span class="mac-only">Neural</span><span class="phone-only">Brief me</span></button>
     </div>
@@ -128,6 +128,7 @@
     <button class="glass chip">Good night</button>
   </div>
   <form class="glass composer" id="composer">
+    <button type="button" class="snap-btn" id="snap-chat" aria-label="Snap a photo for Echo to read"><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
     <label for="chat-input" class="sr">Message Echo</label>
     <textarea id="chat-input" rows="1" placeholder="Message" enterkeyhint="send" autocomplete="off"></textarea>
     <button type="submit" class="cta b40 round" id="send-btn" aria-label="Hold to record a voice note">
@@ -254,6 +255,13 @@
       </div>
     </div>
   </div>
+</section>
+
+<!-- ============ SNAP (pushed) ============ -->
+<section id="v-snap" class="view list-view" aria-label="Snap" hidden>
+  <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Snap</h1><button class="bubble b44" id="snap-again" aria-label="Snap another photo"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></button></header>
+  <div class="scroll" id="snap-body"></div>
+  <input type="file" accept="image/*" id="snap-file" hidden>
 </section>
 
 <!-- ============ BRIEFING (pushed) ============ -->
