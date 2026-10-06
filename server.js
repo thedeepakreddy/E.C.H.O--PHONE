@@ -44,6 +44,10 @@ import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick, localPa
 import { MAX_IMAGE_B64, cleanExpense, monthTotals, recheckSnap, snapActions } from "./lib/snap.js";
 import { MAX_WAITING, FINAL, checkTask, checkAssertion, forPhone, tidy, notificationFor } from "./lib/handoff.js";
 import { createMemory, fromSnap, fromNote, forPhone as memoryForPhone, syncDates, contextText, comingUp } from "./lib/memory.js";
+import {
+  UA, SEARCH_URL, MAX_PAGE, MAX_ASSET, PAGE_HEADERS, ASSET_TYPE, proxyPath, fromProxyPath, checkUrl, addressOrSearch, sensitiveHost,
+  cookieHeader, storeCookies, fetchUpstream, decodeBody, rewriteHtml, rewriteCss, notePage,
+} from "./lib/browse.js";
 
 export const POLL_MS = 25_000;          // how long Echo's "anything for me?" is held open
 export const REQUEST_MS = 30_000;       // how long a phone request may wait for Echo's answer
@@ -82,6 +86,9 @@ export const MAX_EXPENSES = 500;
 export const MAX_SNAPS = 100;
 /** How long a calendar link from Phone mode keeps working. */
 export const ICS_TTL_MS = 30 * 86400_000;
+/** Echo's Browser: how long its session cookie lasts, and requests per phone per minute (pages and their images). */
+export const BROWSE_SESSION_MS = 12 * 3600_000;
+export const BROWSE_RATE = 900;
 
 /**
  * World intelligence for the World page, from Osiris (osirisai.live): conflict
@@ -128,7 +135,7 @@ export function summariseWorld({ conflicts, earthquakes, fires, weather }, now =
 export function createRelay({
   secret, now = () => Date.now(), fetchJson = defaultFetchJson, pollMs = POLL_MS, requestMs = REQUEST_MS,
   gemini = null, store = null, limits = {},
-  publicUrl = "https://echo-phone.onrender.com", pushFetch = fetch, pushAnyHost = false,
+  publicUrl = "https://echo-phone.onrender.com", pushFetch = fetch, pushAnyHost = false, browseAnyHost = false,
 } = {}) {
   if (!secret || secret.length < 32) throw new Error("RELAY_SECRET must be set (at least 32 characters).");
   const secretBuf = Buffer.from(secret);
@@ -235,6 +242,23 @@ export function createRelay({
   /** The address the iPhone's Shortcut posts today's events to; the key in it only lets it do that. */
   const calendarUrl = (key) => `${publicUrl.replace(/\/+$/, "")}/cal/${key}`;
   const cloudHits = new Map();
+  /** Each phone's cookies for the sites it uses in the Browser, sealed in the store, written a moment after they change. */
+  const jars = new Map();
+  function jarFor(device) {
+    let e = jars.get(device);
+    if (!e) {
+      e = store.get(`jar:${device}`).catch(() => null).then((jar) => ({ jar: jar ?? { cookies: [] }, timer: null }));
+      jars.set(device, e);
+      if (jars.size > 50) jars.delete(jars.keys().next().value);
+    }
+    return e;
+  }
+  async function saveJar(device) {
+    const e = await jarFor(device);
+    clearTimeout(e.timer);
+    e.timer = setTimeout(() => { void store.set(`jar:${device}`, e.jar, 30 * 86400).catch(() => {}); }, 1500);
+    e.timer.unref?.();
+  }
   /**
    * A calendar link that needs no storage: the event is sealed into the address
    * itself (encrypted, so the address shows nothing personal), with an expiry.
@@ -657,6 +681,34 @@ export function createRelay({
         return send(res, 200, { ok: true });
       } catch (e) { return sendCloudError(res, e); }
     }
+    if (path.startsWith("/cloud/browse/")) {
+      try {
+        if (path === "/cloud/browse/session") {
+          // The Browser's pages load in a frame, which can't send the cloud pass; a short-lived cookie for /b/ stands in for it.
+          const token = seal(keys.store, { d: device, exp: now() + BROWSE_SESSION_MS, g: passGen });
+          const secure = Boolean(req.socket.encrypted) || String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim() === "https";
+          return send(res, 200, { ok: true, until: now() + BROWSE_SESSION_MS }, {
+            "set-cookie": `eb=${token}; Path=/b/; HttpOnly; SameSite=Strict; Max-Age=${BROWSE_SESSION_MS / 1000}${secure ? "; Secure" : ""}`,
+          });
+        }
+        if (path === "/cloud/browse/clear") {
+          const e = await jarFor(device);
+          e.jar.cookies = [];
+          await store.set(`jar:${device}`, e.jar, 30 * 86400).catch(() => {});
+          return send(res, 200, { ok: true });
+        }
+        if (path === "/cloud/browse/step") {
+          if (!cloud) return send(res, 503, { error: "setup", message: "Echo's browsing needs Phone mode's brain: add GEMINI_API_KEY on Render." });
+          if (rateLimited(device)) return send(res, 429, { error: "busy", message: "Slow down a little — too many requests this minute." });
+          const body = await readJson(req, CLOUD_BODY);
+          return send(res, 200, await cloud.browseStep({ task: body.task, page: body.page, steps: body.steps, notes: body.notes, context: body.context ?? {} }));
+        }
+      } catch (e) {
+        if (e?.input) return send(res, 400, { error: "input", message: e.message });
+        return sendCloudError(res, e);
+      }
+      return send(res, 404, "Not found");
+    }
     if (path.startsWith("/cloud/memory/")) {
       try {
         const body = await readJson(req, 64 * 1024);
@@ -774,6 +826,104 @@ export function createRelay({
     return send(res, 404, "Not found");
   }
 
+  // ---- Echo's Browser (lib/browse.js) ------------------------------------------
+
+  async function browseClaims(req) {
+    const m = /(?:^|;\s*)eb=([A-Za-z0-9._-]+)/.exec(String(req.headers.cookie ?? ""));
+    if (!m) return null;
+    try {
+      const c = unseal(keys.store, m[1]);
+      await passGenLoaded;
+      return c && c.exp > now() && c.g >= passGen && typeof c.d === "string" ? c : null;
+    } catch { return null; }
+  }
+  const sendPage = (res, status, html) => send(res, status, html, { ...PAGE_HEADERS, "content-type": "text/html; charset=utf-8" });
+  const redirect = (res, location) => { res.writeHead(302, { ...SECURITY, ...PAGE_HEADERS, location }); res.end(); };
+  /** The real page a frame request came from (its Referer is one of ours), for the site's own Referer check. */
+  function realReferer(req) {
+    try { return fromProxyPath(new URL(String(req.headers.referer ?? "")).pathname)?.url ?? null; } catch { return null; }
+  }
+  function hitLimit(key, max) {
+    const t = now();
+    const hits = (cloudHits.get(key) ?? []).filter((x) => t - x < 60_000);
+    hits.push(t);
+    cloudHits.set(key, hits);
+    return hits.length > max;
+  }
+
+  async function browseRoute(req, res, url) {
+    const path = url.pathname;
+    const who = await browseClaims(req);
+    if (!who) return sendPage(res, 401, notePage("Open the Browser again", "This page's session ended. Go back to Echo's Browser tab.").replace("<title>", '<meta name="echo-auth" content="expired"><title>'));
+    if (hitLimit(`b:${who.d}`, BROWSE_RATE)) return sendPage(res, 429, notePage("Slow down a little", "Too many pages this minute. Try again in a moment."));
+    if (path === "/b/go") {
+      const q = String(url.searchParams.get("q") ?? "").slice(0, 2000);
+      const target = url.searchParams.get("search") ? (q.trim() ? SEARCH_URL(q.trim()) : null) : addressOrSearch(q);
+      return target ? redirect(res, proxyPath("p", target)) : sendPage(res, 400, notePage("Type an address or a search", ""));
+    }
+    const t = fromProxyPath(path);
+    if (!t) return sendPage(res, 404, notePage("That address can't be opened", "It isn't a web address Echo's Browser can show."));
+    let target = t.url, method = "GET", body = null;
+    if (t.kind === "g") { const u = new URL(t.url); u.search = url.search; target = u.href; }
+    if (t.kind === "f") {
+      if (req.method !== "POST") return redirect(res, proxyPath("p", t.url));
+      try { body = await readBody(req, 1024 * 1024); } catch { return sendPage(res, 413, notePage("That form is too big to send", "")); }
+      method = "POST";
+      // Sign-ins to banks and payment services stay in Safari, where nothing sits in between.
+      const host = new URL(target).hostname;
+      if (sensitiveHost(host) && /(^|&|name=")[^=&"]*(pass|pwd|pin|otp|cvv|cvc|card)[^=&"]*/i.test(body.toString("latin1").slice(0, 20000))) {
+        return sendPage(res, 200, notePage("Sign in to this one in Safari", `Echo's Browser doesn't carry sign-ins to banks and payment services like ${host}. Tap ⋯ → Open in Safari.`, target));
+      }
+    }
+    if (!checkUrl(target)) return sendPage(res, 400, notePage("That address can't be opened", ""));
+    const jarE = await jarFor(who.d);
+    const headers = {
+      "user-agent": UA, "accept-language": String(req.headers["accept-language"] ?? "en-US,en;q=0.9").slice(0, 200),
+      accept: t.kind === "r" ? "image/avif,image/webp,image/*,text/css,*/*;q=0.8" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    };
+    const ref = realReferer(req);
+    if (ref) headers.referer = ref;
+    if (method === "POST") { headers["content-type"] = String(req.headers["content-type"] ?? "application/x-www-form-urlencoded").slice(0, 200); headers.origin = new URL(target).origin; }
+    let up;
+    for (let hop = 0; ; hop++) {
+      const cookie = cookieHeader(jarE.jar, target, now());
+      if (cookie) headers.cookie = cookie; else delete headers.cookie;
+      try {
+        up = await fetchUpstream({ url: target, method, headers, body, limit: t.kind === "r" ? MAX_ASSET : MAX_PAGE, anyHost: browseAnyHost });
+      } catch (e) {
+        if (t.kind === "r") return send(res, 502, "");
+        const why = e?.code === "EBLOCKED" ? "Echo's Browser only opens public websites." : e?.code === "ENOTFOUND" ? "That site doesn't exist, or its address is mistyped." : e?.code === "ETIMEDOUT" ? "The site took too long to answer." : "The site couldn't be reached.";
+        return sendPage(res, 200, notePage("Couldn't open that page", why, target));
+      }
+      const setCookie = up.headers["set-cookie"];
+      if (storeCookies(jarE.jar, target, Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [], now())) void saveJar(who.d);
+      const loc = up.status >= 300 && up.status < 400 ? up.headers.location : null;
+      if (!loc) break;
+      let next;
+      try { next = new URL(String(loc), target); } catch { next = null; }
+      if (!next || !checkUrl(next.href)) return t.kind === "r" ? send(res, 502, "") : sendPage(res, 200, notePage("Couldn't open that page", "The site sent Echo somewhere it can't go.", target));
+      // A page's redirect goes through the frame, so its address stays right; an image's is followed here.
+      if (t.kind !== "r") return redirect(res, proxyPath("p", next.href));
+      if (hop >= 4) return send(res, 502, "");
+      target = next.href; method = "GET"; body = null;
+    }
+    const type = String(up.headers["content-type"] ?? "").toLowerCase();
+    if (t.kind === "r") {
+      if (!ASSET_TYPE.test(type) || up.truncated) return send(res, 415, "");
+      const assetHeaders = { "content-type": type, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; sandbox" };
+      if (type.startsWith("text/css")) return send(res, 200, rewriteCss(decodeBody(up.body, type), target), { ...assetHeaders, "content-type": "text/css; charset=utf-8" });
+      return send(res, 200, up.body, assetHeaders);
+    }
+    const looksHtml = /html|xml/.test(type) || (!type && /^\s*</.test(up.body.subarray(0, 200).toString("latin1")));
+    if (looksHtml) return sendPage(res, 200, rewriteHtml(decodeBody(up.body, type), target).html);
+    if (type.startsWith("text/plain")) {
+      const text = decodeBody(up.body, type).slice(0, 400_000).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      return sendPage(res, 200, `<!doctype html><meta charset="utf-8"><meta name="echo-url" content="${target.replace(/"/g, "&quot;")}"><meta name="viewport" content="width=device-width, initial-scale=1"><pre style="white-space:pre-wrap;font:14px/1.45 ui-monospace,Menlo,monospace;padding:14px;margin:0">${text}</pre>`);
+    }
+    if (/^image\//.test(type)) return sendPage(res, 200, `<!doctype html><meta charset="utf-8"><meta name="echo-url" content="${target.replace(/"/g, "&quot;")}"><meta name="viewport" content="width=device-width, initial-scale=1"><body style="margin:0;background:#111;display:grid;place-items:center;min-height:100vh"><img src="${proxyPath("r", target)}" style="max-width:100%;height:auto" alt=""></body>`);
+    return sendPage(res, 200, notePage("This file can't open here", `It's ${type.split(";")[0] || "a file"} Echo's Browser can't show. Tap ⋯ → Open in Safari to get it.`, target));
+  }
+
   /** The iPhone's Shortcut posts today's events here each morning (see Settings → Calendar from this iPhone). */
   async function phoneCalendarUpload(req, res, key) {
     if (rateLimited(`cal:${key}`)) return send(res, 429, "Too many uploads this minute.");
@@ -815,6 +965,7 @@ export function createRelay({
     const path = url.pathname;
     if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
     if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
+    if (path.startsWith("/b/")) return void browseRoute(req, res, url).catch(() => { if (!res.headersSent) sendPage(res, 502, notePage("Couldn't open that page", "Something went wrong. Try again.")); });
     if (path === "/cron/tick" && req.method === "POST") return void cronTick(req, res);
     const cal = /^\/cal\/([A-Za-z0-9_-]{20,40})$/.exec(path);
     if (cal && req.method === "POST") return void phoneCalendarUpload(req, res, cal[1]);
@@ -882,7 +1033,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   }) : null;
   const relay = createRelay({
     secret: relaySecret, store, gemini, publicUrl: env.RENDER_EXTERNAL_URL || "https://echo-phone.onrender.com",
-    limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200, snaps: Number(env.PHONE_DAILY_SNAPS) || 30 },
+    limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200, snaps: Number(env.PHONE_DAILY_SNAPS) || 30, browseSteps: Number(env.PHONE_DAILY_BROWSE) || 300 },
   });
   console.log(`Phone mode: brain ${gemini ? gemini.model : "off (no GEMINI_API_KEY)"}, store ${store.remote ? "Upstash" : "memory only (no UPSTASH_REDIS_REST_URL/TOKEN)"}`);
   if (paired && env.QSTASH_TOKEN) {

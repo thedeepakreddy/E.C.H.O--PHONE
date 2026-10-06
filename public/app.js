@@ -122,10 +122,13 @@
   const pub = (p) => fetch(p).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))));
 
   // ---------- views ----------
-  const TABS = ["home", "chat", "missions", "world", "settings"];
+  const TABS = ["home", "chat", "missions", "browser", "world"];
   let currentView = "signin", lastTab = store.get("echo_tab") || "home";
-  function show(view) {
+  /** Where each pushed page's Back goes: the page it was opened from. */
+  const backTo = {};
+  function show(view, { back = false } = {}) {
     if (view === "screen" && !(S && macOnline)) { toast("That needs your Mac, and it's offline right now.", true); return; }
+    if (!back && !TABS.includes(view) && view !== currentView && currentView !== "signin") backTo[view] = currentView;
     currentView = view;
     body.dataset.view = view;
     for (const v of document.querySelectorAll(".view")) v.hidden = v.id !== `v-${view}`;
@@ -138,6 +141,7 @@
     if (view === "chat") { unread = 0; renderBadge(); setTimeout(scrollMessages, 30); pollChat(); }
     if (view === "world") loadWorld();
     if (view === "settings") loadPhoneCal();
+    if (view === "browser") openBrowser();
     if (view === "screen") openScreen(); else closeScreen();
     if (view === "missions") { if (last) renderMissions(last); renderHandoffs(); loadHandoffs(); }
     if (view === "brain" && last) renderBrain(last);
@@ -146,7 +150,7 @@
   document.addEventListener("click", (e) => {
     const open = e.target.closest("[data-open]");
     if (open) show(open.dataset.open);
-    if (e.target.closest("[data-back]")) show(lastTab);
+    if (e.target.closest("[data-back]")) show(backTo[currentView] && backTo[currentView] !== currentView ? backTo[currentView] : lastTab, { back: true });
     if (e.target.closest("[data-close]")) closeSheets();
   });
 
@@ -938,6 +942,7 @@
       finally { btn.removeAttribute("aria-busy"); }
       return;
     }
+    if (a.type === "browse") return runEcho(a.data.task);
     if (a.type === "mac") {
       if (!(S && macOnline)) return openHandoff(a.data.task); // the Mac is away: leave it for later, approved with Face ID
       btn.setAttribute("aria-busy", "true");
@@ -1788,6 +1793,449 @@
       if (currentView === "memory") loadMemory();
     } catch (e) { toast(cloudProblem(e), true); }
     finally { btn.removeAttribute("aria-busy"); }
+  });
+
+  // ---------- Browser ----------
+  // Web pages come through the relay with their scripts taken out
+  // (lib/browse.js), so they load in this frame on the app's own address: the
+  // app can read and click them, and they can't run anything. You browse;
+  // "Ask Echo" hands the page to Echo, which reads it as text with every link,
+  // button and field numbered, picks one action at a time (lib/browse-agent.js)
+  // and waits for your tap before anything that pays, sends, submits or deletes.
+  const brFrame = $("br-frame");
+  const PART = 12_000, MAX_RUN_STEPS = 30;
+  const br = { session: 0, url: "", title: "", back: [], fwd: [], nav: null, loading: false, run: null, snap: null, waiters: [] };
+  const RECENT_KEY = "echo_br_recent";
+  const b64u = (s) => { const bytes = new TextEncoder().encode(s); let bin = ""; for (const b of bytes) bin += String.fromCharCode(b); return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+  const pagePath = (url) => `/b/p/${b64u(url)}`;
+  const realUrl = (href) => {
+    try {
+      const m = /\/b\/[prgf]\/([A-Za-z0-9_-]+)/.exec(new URL(href, location.origin).pathname);
+      if (!m) return null;
+      const bin = atob(m[1].replace(/-/g, "+").replace(/_/g, "/"));
+      return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    } catch { return null; }
+  };
+  const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+  function frameDoc() { try { return brFrame.contentDocument; } catch { return null; } }
+
+  async function browserSession(force = false) {
+    if (!force && br.session - Date.now() > 30 * 60_000) return;
+    const d = await cloudApi("/cloud/browse/session", {});
+    br.session = d.until;
+  }
+  async function openBrowser() {
+    renderBrowserBar();
+    if (!passValid()) { renderStart("Sign in once with your Mac online to use the Browser."); return; }
+    if (!br.url && !br.loading) renderStart();
+    try { await browserSession(); } catch (e) { toast(cloudProblem(e), true); }
+  }
+  function renderStart(problem = "") {
+    const box = $("br-start");
+    clear(box);
+    box.hidden = false;
+    brFrame.hidden = true;
+    box.appendChild(el("h2", "", "Echo's Browser"));
+    box.appendChild(el("p", "sub small", problem || "Search or open a site above. Ask Echo to finish what you started, or give it a whole job: \"compare these three laptops\", \"find a table for two on Friday\"."));
+    if (problem) return;
+    const quick = el("div", "br-quick");
+    for (const [label, url] of [["DuckDuckGo", "https://html.duckduckgo.com/html/"], ["Wikipedia", "https://en.m.wikipedia.org/"], ["BBC News", "https://www.bbc.com/news"], ["Hacker News", "https://news.ycombinator.com/"]]) {
+      const b = el("button", "glass chip", label); b.addEventListener("click", () => goTo(url)); quick.appendChild(b);
+    }
+    box.appendChild(quick);
+    let recent = [];
+    try { recent = JSON.parse(store.get(RECENT_KEY) || "[]"); } catch { recent = []; }
+    if (recent.length) {
+      box.appendChild(el("p", "group-title", "Recent"));
+      const list = el("div", "glass list");
+      for (const r of recent.slice(0, 8)) {
+        const row = el("button", "row");
+        const t = el("span", "grow"); t.append(el("span", "clamp1", r.title || hostOf(r.url)), el("span", "sub tiny clamp1", hostOf(r.url)));
+        row.appendChild(t); row.addEventListener("click", () => goTo(r.url));
+        list.appendChild(row);
+      }
+      box.appendChild(list);
+    }
+    box.appendChild(el("p", "sub tiny br-note", "Pages open without their scripts, so app-like sites may not work: ⋯ → Open in Safari for those. Bank and payment sign-ins stay in Safari."));
+  }
+  function remember(url, title) {
+    let recent = [];
+    try { recent = JSON.parse(store.get(RECENT_KEY) || "[]"); } catch { recent = []; }
+    recent = [{ url, title }, ...recent.filter((r) => r.url !== url)].slice(0, 12);
+    store.set(RECENT_KEY, JSON.stringify(recent));
+  }
+  function setLoading(on) { br.loading = on; $("br-progress").classList.toggle("on", on); }
+  function renderBrowserBar() {
+    const u = $("br-url");
+    if (document.activeElement !== u) u.value = br.url ? hostOf(br.url) + (new URL(br.url).pathname.length > 1 ? new URL(br.url).pathname : "") : "";
+    $("br-back").disabled = !br.back.length;
+    $("br-fwd").disabled = !br.fwd.length;
+  }
+  /** Load a page in the frame. `how`: "go" (a new page), "back", "fwd", "reload". */
+  async function loadPath(path, how = "go") {
+    try { await browserSession(); } catch (e) { toast(cloudProblem(e), true); return; }
+    br.nav = how;
+    setLoading(true);
+    $("br-start").hidden = true; brFrame.hidden = false;
+    brFrame.contentWindow ? brFrame.contentWindow.location.replace(path) : (brFrame.src = path);
+  }
+  const goTo = (url) => loadPath(pagePath(url));
+  const goInput = (text, search = false) => loadPath(`/b/go?q=${encodeURIComponent(text)}${search ? "&search=1" : ""}`);
+  brFrame.addEventListener("load", () => {
+    const doc = frameDoc();
+    if (!doc || brFrame.hidden) return;
+    if (doc.querySelector('meta[name="echo-auth"]')) {
+      // The session cookie ran out: renew it and load the page again, once.
+      if (br.nav !== "renew") { br.nav = "renew"; browserSession(true).then(() => brFrame.contentWindow.location.reload()).catch(() => setLoading(false)); }
+      return;
+    }
+    const url = doc.querySelector('meta[name="echo-url"]')?.content || realUrl(brFrame.contentWindow.location.href) || "";
+    if (url && url !== br.url) {
+      if (br.nav === "back") br.fwd.push(br.url);
+      else if (br.nav === "fwd") br.back.push(br.url);
+      else if (br.url) { br.back.push(br.url); br.fwd = []; }
+      br.back = br.back.slice(-50);
+    }
+    br.nav = null;
+    br.url = url;
+    br.title = doc.title || hostOf(url);
+    setLoading(false);
+    renderBrowserBar();
+    if (url) remember(url, br.title);
+    // A link or a form inside the page: show it's loading.
+    doc.addEventListener("click", (e) => { const a = e.target.closest && e.target.closest("a[href]"); if (a && !a.getAttribute("href").startsWith("#")) setLoading(true); }, true);
+    doc.addEventListener("submit", () => setLoading(true), true);
+    const refresh = doc.querySelector('meta[name="echo-refresh"]')?.content;
+    if (refresh && refresh.startsWith("/b/p/") && !br.run) setTimeout(() => { if (frameDoc() === doc) loadPath(refresh); }, 1200);
+    const waiters = br.waiters; br.waiters = [];
+    for (const w of waiters) w();
+  });
+  $("br-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = $("br-url").value.trim();
+    if (!v) return;
+    $("br-url").blur();
+    goInput(v);
+  });
+  $("br-url").addEventListener("focus", () => { if (br.url) { $("br-url").value = br.url; setTimeout(() => $("br-url").select(), 0); } });
+  $("br-url").addEventListener("blur", () => setTimeout(renderBrowserBar, 0));
+  $("br-back").addEventListener("click", () => { if (br.back.length) loadPath(pagePath(br.back.pop()), "back"); });
+  $("br-fwd").addEventListener("click", () => { if (br.fwd.length) loadPath(pagePath(br.fwd.pop()), "fwd"); });
+  $("br-reload").addEventListener("click", () => { if (br.url) loadPath(pagePath(br.url), "reload"); });
+  $("br-more").addEventListener("click", () => openSheet("sheet-bmore"));
+  $("bm-safari").addEventListener("click", () => {
+    closeSheets();
+    if (!br.url) return toast("Open a page first.");
+    location.href = standalone ? `x-safari-${br.url}` : br.url;
+  });
+  $("bm-copy").addEventListener("click", async () => { closeSheets(); try { await navigator.clipboard.writeText(br.url); toast("Copied"); } catch { toast("Couldn't copy.", true); } });
+  $("bm-start").addEventListener("click", () => { closeSheets(); br.url = ""; brFrame.hidden = true; brFrame.contentWindow && brFrame.contentWindow.location.replace("about:blank"); renderBrowserBar(); renderStart(); });
+  async function clearSites() {
+    if (!confirm("Sign out of every website in Echo's Browser?")) return;
+    try { await cloudApi("/cloud/browse/clear", {}); toast("Signed out of all websites"); } catch (e) { toast(cloudProblem(e), true); }
+  }
+  $("bm-clear").addEventListener("click", () => { closeSheets(); clearSites(); });
+  $("br-clear").addEventListener("click", clearSites);
+
+  // ----- the page as Echo sees it -----
+  const INTERACTIVE = "a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=checkbox], [role=tab], [role=menuitem], [role=switch], [role=radio]";
+  const BLOCK = /^(P|DIV|LI|TR|H[1-6]|SECTION|ARTICLE|HEADER|FOOTER|NAV|MAIN|ASIDE|UL|OL|TABLE|FORM|FIELDSET|BR|HR|DT|DD|BLOCKQUOTE|PRE|FIGURE|FIGCAPTION|DETAILS)$/;
+  const SKIP = /^(STYLE|SCRIPT|NOSCRIPT|TEMPLATE|HEAD|SVG|CANVAS|IFRAME|OBJECT)$/;
+  const tidy = (t, n = 80) => { const s = String(t || "").replace(/\s+/g, " ").trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
+  /** Fields Echo never types into: passwords, cards, codes, ID numbers. */
+  function secretField(e) {
+    const hint = `${e.type || ""} ${e.name || ""} ${e.id || ""} ${e.autocomplete || ""} ${e.placeholder || ""} ${e.getAttribute("aria-label") || ""}`.toLowerCase();
+    return e.type === "password" || /cc-|card|cvv|cvc|security.?code|iban|pin\b|one-time|otp|passcode|ssn|passport|tax.?id/.test(hint);
+  }
+  /** What an element says, for the user: its text, value, label or image. */
+  const elLabel = (e) => tidy(e.innerText || e.value || e.getAttribute("aria-label") || e.querySelector?.("img[alt]")?.alt || e.title || labelFor(e, frameDoc())
+    || (e.href && realUrl(e.href) ? `the link to ${realUrl(e.href).replace(/^https?:\/\/(www\.)?/, "")}` : "") || "", 60) || "this";
+  function labelFor(e, doc) {
+    const aria = e.getAttribute("aria-label") || e.getAttribute("title");
+    if (aria) return aria;
+    if (e.id) { const l = doc.querySelector(`label[for="${CSS.escape(e.id)}"]`); if (l) return l.textContent; }
+    const wrap = e.closest("label");
+    if (wrap) return wrap.textContent;
+    return e.getAttribute("placeholder") || e.name || "";
+  }
+  function describe(e, doc) {
+    const tag = e.tagName;
+    if (tag === "A") {
+      const text = tidy(e.innerText || e.getAttribute("aria-label") || e.querySelector("img[alt]")?.alt || e.title, 90) || "link";
+      const to = realUrl(e.href);
+      return `<link>${text}</link>${to ? ` (${tidy(to.replace(/^https?:\/\/(www\.)?/, ""), 70)})` : ""}`;
+    }
+    if (tag === "SELECT") {
+      const opts = [...e.options].slice(0, 14).map((o) => tidy(o.text, 30));
+      return `<select "${tidy(labelFor(e, doc), 50)}" chosen="${tidy(e.selectedOptions[0]?.text, 40)}" options: ${opts.join(" | ")}${e.options.length > 14 ? " | …" : ""}>`;
+    }
+    if (tag === "TEXTAREA") return `<textarea "${tidy(labelFor(e, doc), 60)}" value="${tidy(e.value, 80)}">`;
+    if (tag === "INPUT") {
+      const type = (e.type || "text").toLowerCase();
+      if (["submit", "button", "reset", "image"].includes(type)) return `<button>${tidy(e.value || e.alt || labelFor(e, doc), 60) || "submit"}</button>`;
+      if (type === "checkbox" || type === "radio") return `<${type} "${tidy(labelFor(e, doc), 60)}"${e.checked ? " checked" : ""}>`;
+      if (secretField(e)) return `<input type=${type} "${tidy(labelFor(e, doc), 50)}" — the user types this themselves>`;
+      return `<input type=${type} "${tidy(labelFor(e, doc), 60)}" value="${tidy(e.value, 80)}">`;
+    }
+    return `<button>${tidy(e.innerText || e.getAttribute("aria-label") || e.title, 80) || "button"}</button>`;
+  }
+  function pageSnapshot() {
+    const doc = frameDoc();
+    if (!doc || !doc.body || brFrame.hidden) return { text: "", elements: [] };
+    const win = brFrame.contentWindow;
+    const elements = [], out = [];
+    const walk = (node) => {
+      if (node.nodeType === 3) { const t = node.nodeValue.replace(/\s+/g, " "); if (t.trim()) out.push(t); return; }
+      if (node.nodeType !== 1 || SKIP.test(node.tagName)) return;
+      if (node.hidden || node.getAttribute("aria-hidden") === "true") return;
+      const st = win.getComputedStyle(node);
+      if (st.display === "none" || st.visibility === "hidden") return;
+      if (node.matches(INTERACTIVE) && !node.disabled) {
+        elements.push(node);
+        out.push(` [${elements.length}]${describe(node, doc)} `);
+        if (node.tagName !== "SUMMARY") return;
+      }
+      const h = /^H([1-6])$/.exec(node.tagName);
+      if (h) out.push(`\n${"#".repeat(+h[1])} `);
+      if (node.tagName === "IMG" && node.alt && node.alt.trim().length > 2) out.push(` (image: ${tidy(node.alt, 60)}) `);
+      for (const c of node.childNodes) walk(c);
+      if (BLOCK.test(node.tagName)) out.push("\n");
+    };
+    walk(doc.body);
+    const text = out.join("").replace(/[ \t ]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    return { text, elements };
+  }
+
+  // ----- carrying out Echo's actions -----
+  const RISKY_WORDS = /\b(pay|buy|order|purchase|checkout|check out|book|reserve|send|submit|confirm|delete|remove|unsubscribe|subscribe|sign ?up|register|donate|transfer|apply|post|publish)\b/i;
+  function needsApproval(a, e) {
+    if (a.args.risky) return true;
+    if (!e) return false;
+    const label = tidy(e.innerText || e.value || e.getAttribute("aria-label") || "", 80);
+    const form = e.form || e.closest("form");
+    const submits = (e.tagName === "BUTTON" && (e.type || "submit") === "submit") || (e.tagName === "INPUT" && /^(submit|image)$/i.test(e.type)) || (a.name === "type" && a.args.submit);
+    if (submits && form && /\/b\/f\//.test(e.getAttribute("formaction") || form.getAttribute("action") || "")) return true; // sends a form to the site
+    return RISKY_WORDS.test(label);
+  }
+  function waitForLoad(ms = 15_000) {
+    return new Promise((resolve) => {
+      const t = setTimeout(() => { br.waiters = br.waiters.filter((w) => w !== done); resolve(false); }, ms);
+      const done = () => { clearTimeout(t); resolve(true); };
+      br.waiters.push(done);
+    });
+  }
+  /** Do something that may load a new page; report where Echo ends up. */
+  async function settle(act, { expectLoad = true } = {}) {
+    const before = br.url;
+    const loaded = waitForLoad(expectLoad ? 15_000 : 1500);
+    act();
+    const ok = await loaded;
+    if (!ok && expectLoad && br.loading) return "The page is taking long to load.";
+    return br.url !== before ? `Now on "${tidy(br.title, 80)}" (${tidy(br.url, 120)})` : "Done; still on the same page.";
+  }
+  function highlight(e) {
+    if (!e) return () => {};
+    try { e.scrollIntoView({ block: "center" }); } catch { /* fine */ }
+    const was = e.style.outline;
+    e.style.outline = "3px solid #5ee7f5"; e.style.outlineOffset = "2px";
+    return () => { e.style.outline = was; e.style.outlineOffset = ""; };
+  }
+  let approvalResolve = null;
+  function askApproval(what) {
+    $("ba-what").textContent = what;
+    $("ba-host").textContent = br.url ? `On ${hostOf(br.url)}` : "";
+    openSheet("sheet-bapprove");
+    return new Promise((resolve) => { approvalResolve = resolve; });
+  }
+  function answerApproval(yes) { const r = approvalResolve; approvalResolve = null; closeSheets(); if (r) r(yes); }
+  $("ba-yes").addEventListener("click", () => answerApproval(true));
+  $("ba-no").addEventListener("click", () => answerApproval(false));
+  $("scrim").addEventListener("click", () => { if (approvalResolve) answerApproval(false); });
+
+  async function doAction(a) {
+    const els = br.snap ? br.snap.elements : [];
+    const pick = (i) => { const e = els[i - 1]; return e && e.isConnected ? e : null; };
+    const run = br.run;
+    switch (a.name) {
+      case "click": {
+        const e = pick(a.args.index);
+        if (!e) return `There's no element [${a.args.index}] on this page now.`;
+        const unmark = highlight(e);
+        if (needsApproval(a, e)) {
+          const ok = await askApproval(`${a.args.why || "Continue"}: tap "${elLabel(e)}"`);
+          if (!ok || run.stopped) { unmark(); return "The user said no. Don't do this; ask them or finish."; }
+        }
+        const isLink = e.tagName === "A" && e.getAttribute("href") && !e.getAttribute("href").startsWith("#");
+        const submits = !!(e.form || e.closest("form")) && (e.tagName === "BUTTON" || /^(submit|image)$/i.test(e.type || ""));
+        const result = await settle(() => e.click(), { expectLoad: isLink || submits });
+        unmark();
+        return result;
+      }
+      case "type": {
+        const e = pick(a.args.index);
+        if (!e || !/^(INPUT|TEXTAREA)$/.test(e.tagName)) return `There's no text field [${a.args.index}] on this page now.`;
+        if (secretField(e)) return "That's a password, card or code field: Echo doesn't type those. Use ask_user so the user types it.";
+        const unmark = highlight(e);
+        e.value = a.args.text;
+        e.dispatchEvent(new Event("input", { bubbles: true }));
+        e.dispatchEvent(new Event("change", { bubbles: true }));
+        if (!a.args.submit) { unmark(); return `Typed "${tidy(a.args.text, 60)}".`; }
+        const form = e.form || e.closest("form");
+        if (!form) { unmark(); return "Typed it, but there's no form to send; click the page's button instead."; }
+        if (needsApproval(a, e)) {
+          const ok = await askApproval(`Send this form with "${tidy(a.args.text, 60)}"`);
+          if (!ok || run.stopped) { unmark(); return "The user said no. Don't send it; ask them or finish."; }
+        }
+        const result = await settle(() => (form.requestSubmit ? form.requestSubmit() : form.submit()));
+        unmark();
+        return result;
+      }
+      case "select": {
+        const e = pick(a.args.index);
+        if (!e || e.tagName !== "SELECT") return `There's no list [${a.args.index}] on this page now.`;
+        const want = a.args.option.toLowerCase();
+        const opt = [...e.options].find((o) => o.text.trim().toLowerCase() === want) || [...e.options].find((o) => o.text.toLowerCase().includes(want));
+        if (!opt) return `"${a.args.option}" isn't one of the options.`;
+        e.value = opt.value;
+        e.dispatchEvent(new Event("change", { bubbles: true }));
+        return `Chose "${tidy(opt.text, 60)}".`;
+      }
+      case "open_url": return settle(() => goTo(a.args.url));
+      case "search": return settle(() => goInput(a.args.query, true));
+      case "back": return br.back.length ? settle(() => loadPath(pagePath(br.back.pop()), "back")) : "There's no page to go back to.";
+      case "read_more": {
+        run.part++;
+        return `Showing part ${run.part} of the page.`;
+      }
+      case "ask_user": {
+        const answer = await askUser(a.args.question);
+        return answer == null ? "The user didn't answer." : `The user said: ${answer}`;
+      }
+      default: return "That isn't something Echo can do here.";
+    }
+  }
+
+  // ----- Echo's turn -----
+  function renderRun(title, line) {
+    $("br-run").hidden = false;
+    $("br-run-title").textContent = title;
+    $("br-run-line").textContent = line;
+  }
+  function describeAction(a) {
+    const el2 = br.snap && br.snap.elements[(a.args.index || 0) - 1];
+    const what = el2 ? `"${elLabel(el2)}"` : "";
+    switch (a.name) {
+      case "click": return `${a.args.why || "Clicking"} — ${what}`;
+      case "type": return `Typing "${tidy(a.args.text, 40)}"${what ? ` into ${what}` : ""}`;
+      case "select": return `Choosing "${a.args.option}"`;
+      case "open_url": return `Opening ${hostOf(a.args.url)}`;
+      case "search": return `Searching for "${tidy(a.args.query, 50)}"`;
+      case "back": return "Going back";
+      case "read_more": return "Reading further down the page";
+      case "ask_user": return "Asking you something";
+      default: return "Working…";
+    }
+  }
+  let askResolve = null;
+  function askUser(question) {
+    renderRun("Echo needs you", question);
+    const ask = $("br-ask"), input = $("br-task");
+    ask.hidden = false; ask.dataset.mode = "answer";
+    input.placeholder = "Your answer"; input.value = "";
+    setTimeout(() => input.focus(), 50);
+    return new Promise((resolve) => { askResolve = resolve; });
+  }
+  async function runEcho(task) {
+    if (!passValid()) return toast("Sign in once with your Mac online to use the Browser.", true);
+    if (br.run) return toast("Echo is already on it. Tap Take over to stop.");
+    if (currentView !== "browser") show("browser");
+    try { await browserSession(); } catch (e) { return toast(cloudProblem(e), true); }
+    const run = br.run = { task, steps: [], notes: [], sources: [], part: 1, stopped: false, abort: new AbortController() };
+    $("br-result").hidden = true;
+    $("br-ask").hidden = true;
+    $("br-panel").classList.add("running");
+    renderRun("Echo is browsing", "Looking at the page…");
+    let answer = null, success = false;
+    try {
+      while (!run.stopped) {
+        if (run.steps.length >= MAX_RUN_STEPS) { answer = `I stopped after ${MAX_RUN_STEPS} steps without finishing.`; break; }
+        br.snap = pageSnapshot();
+        const parts = Math.max(1, Math.ceil(br.snap.text.length / PART));
+        run.part = Math.min(run.part, parts);
+        const text = br.snap.text.slice((run.part - 1) * PART, run.part * PART);
+        const d = await cloudApi("/cloud/browse/step", {
+          task, page: { url: br.url, title: br.title, text, part: run.part, parts }, steps: run.steps, notes: run.notes, context: { tz: localTz() },
+        }, { signal: run.abort.signal });
+        if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
+        run.notes.push(...(d.notes || []));
+        for (const s2 of d.sources || []) if (!run.sources.some((x) => x.url === s2.url)) run.sources.push(s2);
+        if (run.stopped) break;
+        const a = d.action;
+        if (a.name === "done") { answer = a.args.answer; success = a.args.success; break; }
+        renderRun(`Echo is browsing · step ${run.steps.length + 1}`, describeAction(a));
+        const result = await doAction(a);
+        if (a.name !== "read_more") run.part = a.name === "click" || a.name === "back" || a.name === "open_url" || a.name === "search" || (a.name === "type" && a.args.submit) ? 1 : run.part;
+        run.steps.push({ action: a.name, args: a.args, result });
+      }
+    } catch (e) {
+      if (!run.stopped) answer = e.name === "AbortError" ? null : e.status ? cloudProblem(e) : "Something went wrong while browsing.";
+    }
+    finishRun(run, answer, success);
+  }
+  function finishRun(run, answer, success) {
+    if (br.run !== run) return;
+    br.run = null;
+    $("br-panel").classList.remove("running");
+    $("br-run").hidden = true;
+    const ask = $("br-ask"); ask.hidden = false; ask.dataset.mode = ""; $("br-task").placeholder = "Ask Echo to do something here";
+    if (run.stopped || answer == null) return;
+    const box = $("br-result");
+    clear(box);
+    box.hidden = false;
+    const head = el("div", "row-i br-result-head");
+    head.append(el("b", "grow", success ? "Echo finished" : "Echo stopped"));
+    const close = el("button", "glass small-pill", "Close"); close.addEventListener("click", () => { box.hidden = true; });
+    head.appendChild(close);
+    box.append(head, el("p", "br-answer", answer));
+    if (run.sources.length) {
+      const srcs = el("div", "srcs");
+      for (const s2 of run.sources.slice(0, 4)) { const l = el("button", "glass small-pill", s2.title); l.addEventListener("click", () => goTo(s2.url)); srcs.appendChild(l); }
+      box.appendChild(srcs);
+    }
+    // The chat keeps it too (and the Mac gets it with Phone mode's other messages).
+    const at = Date.now();
+    putMessage({ k: newKey(), at, from: "you", text: `🌐 ${run.task}`, kind: "text", src: "phone" });
+    putMessage({ k: newKey(), at: at + 1, from: "echo", text: answer, kind: "text", src: "phone", sources: run.sources.slice(0, 4) });
+    syncToMac();
+  }
+  function takeOver() {
+    const run = br.run;
+    if (!run) return;
+    run.stopped = true;
+    run.abort.abort();
+    if (approvalResolve) answerApproval(false);
+    if (askResolve) { const r = askResolve; askResolve = null; r(null); }
+    finishRun(run, null, false);
+    toast("You're in control.");
+  }
+  $("br-takeover").addEventListener("click", takeOver);
+  const brTask = $("br-task");
+  brTask.addEventListener("input", () => { brTask.style.height = "40px"; brTask.style.height = `${Math.min(110, brTask.scrollHeight)}px`; });
+  brTask.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("br-ask").requestSubmit(); } });
+  $("br-ask").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = brTask.value.trim();
+    if (!text) return;
+    brTask.value = ""; brTask.style.height = "40px"; brTask.blur();
+    if ($("br-ask").dataset.mode === "answer" && askResolve) {
+      const r = askResolve; askResolve = null;
+      $("br-ask").hidden = true; $("br-ask").dataset.mode = "";
+      $("br-task").placeholder = "Ask Echo to do something here";
+      renderRun("Echo is browsing", "Carrying on…");
+      r(text);
+      return;
+    }
+    runEcho(text);
   });
 
   // ---------- Hand-off to the Mac ----------

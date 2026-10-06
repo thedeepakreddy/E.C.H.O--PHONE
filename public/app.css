@@ -502,3 +502,37 @@ body:not([data-mode="phone"]) .phone-only, body[data-mode="phone"] .mac-only { d
 .msg-tools { display: flex; gap: 6px; margin-top: 8px; }
 .msg.me .msg-tools .small-pill { color: #fff; }
 .saved-chip { color: var(--cyan); }
+
+/* ---------- Browser ---------- */
+.browser { padding-bottom: 0; }
+.br-bar { position: relative; flex: none; margin: calc(var(--safe-top) + 4px) 10px 8px; border-radius: 24px; min-height: 52px; display: flex; align-items: center; gap: 2px; padding: 5px 6px; }
+.br-btn { flex: none; width: 34px; height: 40px; display: grid; place-items: center; color: var(--text); border-radius: 12px; }
+.br-btn:disabled { opacity: .3; }
+.br-btn:active { background: rgba(255, 255, 255, .08); }
+.br-url { flex: 1; min-width: 0; }
+.br-url input { width: 100%; height: 38px; padding: 0 12px; border-radius: 14px; background: rgba(255, 255, 255, .08); text-overflow: ellipsis; }
+.br-url input:not(:focus) { text-align: center; }
+.br-progress { position: absolute; left: 22px; right: 22px; bottom: 3px; height: 2px; border-radius: 2px; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); transform-origin: left; transform: scaleX(0); opacity: 0; }
+.br-progress.on { opacity: 1; animation: br-load 6s cubic-bezier(.1, .7, .2, 1) forwards; }
+@keyframes br-load { from { transform: scaleX(.05); } to { transform: scaleX(.92); } }
+.br-stage { position: relative; flex: 1; min-height: 0; margin: 0 8px; border-radius: 20px; overflow: hidden; box-shadow: 0 8px 22px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .1); }
+.br-stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+.br-start { position: absolute; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 22px 16px; display: flex; flex-direction: column; gap: 12px; background: rgba(10, 22, 28, .55); }
+.br-start > * { flex-shrink: 0; }
+.br-quick { display: flex; flex-wrap: wrap; gap: 8px; }
+.br-note { margin-top: 4px; }
+.br-panel { flex: none; margin: 8px 10px calc(var(--tab-h) + var(--tab-gap) + 10px); border-radius: 26px; padding: 6px; display: flex; flex-direction: column; gap: 4px; transition: margin .25s ease; }
+body.kb .br-panel { margin-bottom: 8px; }
+.br-panel.running { box-shadow: 0 0 0 1px rgba(94, 231, 245, .55), 0 0 26px rgba(94, 231, 245, .28); }
+.br-ask { display: flex; align-items: flex-end; gap: 6px; padding-left: 12px; }
+.br-ask textarea { flex: 1; resize: none; height: 40px; max-height: 110px; padding: 9px 0; line-height: 22px; }
+.br-run { display: flex; align-items: center; gap: 12px; padding: 8px 6px 8px 12px; }
+.br-run b { display: block; font-size: 14px; }
+.br-spin { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(94, 231, 245, .25); border-top-color: var(--cyan); animation: br-turn .8s linear infinite; }
+@keyframes br-turn { to { transform: rotate(360deg); } }
+.br-result { max-height: 38vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 10px 6px; display: flex; flex-direction: column; gap: 8px; }
+.br-result-head { gap: 8px; }
+.br-answer { white-space: pre-wrap; font-size: 15px; line-height: 1.42; user-select: text; -webkit-user-select: text; }
+.br-result .srcs { display: flex; flex-wrap: wrap; gap: 6px; }
+.ba-what { font-size: 17px; font-weight: 600; line-height: 1.35; }
+@media (prefers-reduced-motion: reduce) { .br-spin, .br-progress.on { animation: none; } }
