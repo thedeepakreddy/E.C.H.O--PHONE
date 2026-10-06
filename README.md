@@ -83,6 +83,22 @@ To set it up, add these to the service's **Environment** on Render:
 
 `/healthz` shows whether Phone mode's brain and storage are set up.
 
+### Morning briefing and reminders
+
+Turn on **Settings → Morning briefing → Briefing and reminders** in the Home Screen app, and allow notifications when asked.
+
+- **The briefing** arrives at the time you choose, on the days you choose. It has:
+  - weather for your saved location
+  - today's calendar and unread email that needs you, from the summary Echo on the Mac leaves hourly, so it works even with the Mac off
+  - earthquakes and storms within reach
+  - what the Mac finished overnight
+  - today's reminders
+
+  **Brief me** builds it on demand.
+- **Reminders** from Phone mode arrive as Echo notifications at their time. With notifications off, they go to Calendar through Safari instead.
+
+Notifications are encrypted end to end (Web Push, RFC 8291). The relay's notification key is derived from `RELAY_SECRET`, so there's nothing extra to configure. Timed work runs every minute while the relay is awake, and QStash wakes it every 5 minutes while the Mac is off.
+
 ## Notes
 
 - **Free plan.** Render's free services sleep after 15 minutes without traffic. While Echo runs, its polling keeps the relay awake. If the Mac has been off, the first open takes about a minute while Render wakes up. One always-on service uses about 744 of the 750 free hours a month.

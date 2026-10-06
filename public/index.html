@@ -86,7 +86,7 @@
       <button class="act" id="act-stop"><span class="bubble b58"><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg></span>Stop</button>
       <button class="act" data-open="screen"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>Screen</button>
       <button class="act" data-open="brain"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3V17a3 3 0 0 0 6 0V4zM12 4a4 4 0 0 1 4 4 3.5 3.5 0 0 1 2 6.3V17a3 3 0 0 1-6 0"/></svg></span>Brain</button>
-      <button class="act" id="act-neural"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7h8M7 8l4 8M17 9l-4 7"/></svg></span>Neural</button>
+      <button class="act" id="act-neural"><span class="bubble b58"><svg class="i22 mac-only" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7h8M7 8l4 8M17 9l-4 7"/></svg><svg class="i22 phone-only" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg></span><span class="mac-only">Neural</span><span class="phone-only">Brief me</span></button>
     </div>
     <div class="cards2">
       <button class="glass card weather" id="weather-card" aria-label="Weather">
@@ -193,6 +193,15 @@
       <div class="row col-row"><label for="set-shortcuts" class="small">Shortcuts Echo may run</label>
         <input id="set-shortcuts" class="row-input" placeholder="Names, separated by commas" autocomplete="off" autocapitalize="words" enterkeyhint="done"></div>
     </div>
+    <p class="group-title">Morning briefing</p>
+    <div class="glass list">
+      <button class="row" role="switch" aria-checked="false" id="sw-brief"><span class="grow">Briefing and reminders</span><span class="track"><span class="knob"></span></span></button>
+      <div class="row"><label for="brief-time" class="grow">Time</label><input type="time" id="brief-time" value="07:00" class="row-select"></div>
+      <div class="row"><label for="brief-days" class="grow">Days</label><select id="brief-days" class="row-select"><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="weekends">Weekends</option></select></div>
+      <button class="row" id="brief-open"><span class="grow">Open today's briefing</span><span class="chev" aria-hidden="true"></span></button>
+      <button class="row" id="push-test"><span class="grow">Send a test notification</span></button>
+    </div>
+    <p class="sub tiny note-line" id="brief-note">A notification each morning with your weather, calendar, email that needs you and what's happening nearby. Uses your weather location.</p>
     <p class="group-title">Voice at the Mac</p>
     <div class="glass list">
       <button class="row" role="switch" aria-checked="false" data-voice="ttsEnabled"><span class="grow">Spoken replies</span><span class="track"><span class="knob"></span></span></button>
@@ -245,6 +254,12 @@
       </div>
     </div>
   </div>
+</section>
+
+<!-- ============ BRIEFING (pushed) ============ -->
+<section id="v-briefing" class="view list-view" aria-label="Briefing" hidden>
+  <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Today</h1><button class="bubble b44" id="brief-refresh" aria-label="Brief me now"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg></button></header>
+  <div class="scroll" id="brief-body"><div class="glass list"><p class="sub empty">Loading your briefing…</p></div></div>
 </section>
 
 <!-- ============ BRAIN (pushed) ============ -->

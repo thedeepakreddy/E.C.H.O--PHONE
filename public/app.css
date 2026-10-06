@@ -413,3 +413,18 @@ body.kb .reactor-glow { display: none; }
 .row-input { width: 100%; background: transparent; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 16px; padding: 2px 0; }
 .row-input::placeholder { color: var(--sub); }
 #use-phone { margin-top: -6px; }
+
+/* ---------- Morning briefing ---------- */
+body:not([data-mode="phone"]) .phone-only, body[data-mode="phone"] .mac-only { display: none; }
+.row-select { background: transparent; border: 0; color: var(--sub); font: inherit; font-size: 16px; text-align: right; -webkit-appearance: none; appearance: none; padding: 0; min-width: 0; }
+.row-select:focus { outline: none; color: var(--text); }
+.note-line { padding: 0 8px; line-height: 1.45; }
+.bcard { border-radius: 24px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.bcard h3 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--sub); font-weight: 600; margin: 0; }
+.bcard .big { font-size: 26px; font-weight: 600; }
+.bcard ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bcard li { display: flex; gap: 10px; align-items: baseline; font-size: 15px; }
+.bcard li .t { color: var(--cyan); font-variant-numeric: tabular-nums; min-width: 44px; }
+.bcard .fine { font-size: 12px; color: var(--sub); }
+.brief-date { padding: 0 6px; color: var(--sub); font-size: 13px; }
+#brief-refresh[aria-busy="true"] svg { animation: spin 1s linear infinite; }

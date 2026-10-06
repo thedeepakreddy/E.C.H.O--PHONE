@@ -271,7 +271,7 @@ test("relay: calendar links are sealed, long-lived and come with the answer", as
     assert.equal(bad.status, 400);
     // A reminder button arrives with its link, so a tap can open Safari at once.
     const chat = await (await fetch(`${r.base}/cloud/chat`, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify({ text: "remind me", history: [] }) })).json();
-    assert.equal(chat.actions[0].type, "calendar");
+    assert.equal(chat.actions[0].type, "reminder");
     assert.match(chat.actions[0].url, /^\/ics\/v1\./);
     t += 31 * 86400_000;
     assert.equal((await fetch(r.base + url)).status, 404, "links expire after 30 days");

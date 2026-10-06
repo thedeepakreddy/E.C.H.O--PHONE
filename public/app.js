@@ -104,6 +104,8 @@
   function savePass(p) { if (typeof p === "string" && p.startsWith("cp1.")) { PASS = p; store.set("echo_pass", p); } }
   let mode = store.get("echo_mode") === "phone" ? "phone" : "mac";
   let macOnline = false, macOfflineSince = 0, cloudInfo = null, cloudBusy = false, macChip = "Your Mac";
+  /** This phone's briefing settings, whether it gets notifications, and its latest briefing. */
+  let briefInfo = null;
   const u = (p) => `${p}${p.includes("?") ? "&" : "?"}t=${T}${S ? `&s=${S}` : ""}`;
 
   async function api(path, { json, body: payload, method, raw, quiet } = {}) {
@@ -435,6 +437,8 @@
     try {
       cloudInfo = await cloudApi("/cloud/status");
       if (!S) markMac(!!cloudInfo.macOnline);
+      briefInfo = await cloudApi("/cloud/briefing");
+      renderBriefSettings();
     } catch { /* keep the last answer */ }
     renderMode();
   }
@@ -489,6 +493,7 @@
     try { await api("/stop", { json: {} }); if (mode === "mac") toast("Stopped"); } catch { toast("Couldn't reach your Mac.", true); }
   });
   $("act-neural").addEventListener("click", async () => {
+    if (mode === "phone") return openBriefing();
     if (!(S && macOnline)) return toast("That needs your Mac, and it's offline right now.", true);
     try { await api("/action", { json: { type: "open-neural" } }); toast("Neural map is open on your Mac"); } catch (e) { toast(e.message, true); }
   });
@@ -606,7 +611,7 @@
     if (!mine && m.actions && m.actions.length) {
       const acts = el("div", "acts");
       for (const a of m.actions) {
-        const btn = el("button", "glass act-btn", a.label);
+        const btn = el("button", "glass act-btn", a.done ? `Reminder set · ${eventWhen(a.data.start)}` : a.label);
         btn.addEventListener("click", (e) => { e.stopPropagation(); runAction(a, btn); });
         acts.appendChild(btn);
       }
@@ -709,10 +714,10 @@
   // ---------- Phone mode: asking Echo in the cloud ----------
   const shortcutList = () => String(store.get("echo_shortcuts") || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20);
   function historyNow() { return byTime().slice(-20).map((m) => ({ role: m.from === "you" ? "user" : "echo", text: m.text })); }
+  function localTz() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } }
   function cloudContext() {
     const pl = place();
-    let tz = "UTC";
-    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { /* default */ }
+    const tz = localTz();
     return { tz, city: pl && pl.name !== "Current location" ? pl.name : undefined, lat: pl ? pl.lat : undefined, lon: pl ? pl.lon : undefined, shortcuts: shortcutList() };
   }
   function setCloudBusy(on) {
@@ -808,6 +813,22 @@
       return;
     }
     if (a.type === "calendar") return openCalendar(a);
+    if (a.type === "reminder") {
+      if (a.done) return toast("That reminder is already set.");
+      if (!(briefInfo && briefInfo.subscribed)) {
+        toast("Turn on Briefing and reminders in Settings to get reminders from Echo. Adding it to Calendar for now.");
+        return openCalendar(a);
+      }
+      btn.setAttribute("aria-busy", "true");
+      try {
+        await cloudApi("/cloud/reminders", { text: a.data.title, when: a.data.start, tz: localTz() });
+        a.done = true; saveCache();
+        btn.textContent = `Reminder set · ${eventWhen(a.data.start)}`;
+        toast(`Echo will remind you ${eventWhen(a.data.start)}`);
+      } catch (e) { toast(cloudProblem(e), true); }
+      finally { btn.removeAttribute("aria-busy"); }
+      return;
+    }
     if (a.type === "mac") {
       if (!(S && macOnline)) return toast("Your Mac is offline. Try again when it's on.", true);
       btn.setAttribute("aria-busy", "true");
@@ -1033,7 +1054,10 @@
   }
   $("weather-card").addEventListener("click", () => (place() ? loadWeather() : openSheet("sheet-place")));
   $("set-weather").addEventListener("click", () => openSheet("sheet-place"));
-  function choosePlace(p) { store.set("echo_place", JSON.stringify(p)); closeSheets(); loadWeather(); toast(`Weather for ${p.name}`); }
+  function choosePlace(p) {
+    store.set("echo_place", JSON.stringify(p)); closeSheets(); loadWeather(); toast(`Weather for ${p.name}`);
+    if (briefInfo && briefInfo.prefs && briefInfo.prefs.on) saveBriefPrefs().catch(() => {});
+  }
   $("pl-here").addEventListener("click", () => {
     if (!navigator.geolocation) return toast("Location isn't available on this phone.", true);
     navigator.geolocation.getCurrentPosition(
@@ -1136,6 +1160,129 @@
     }
   });
   $("version-line").textContent = `Echo Remote ${VERSION}`;
+
+  // ---------- morning briefing and notifications ----------
+  function renderBriefSettings() {
+    const on = !!(briefInfo && briefInfo.prefs && briefInfo.prefs.on && briefInfo.subscribed);
+    $("sw-brief").setAttribute("aria-checked", String(on));
+    if (briefInfo && briefInfo.prefs && document.activeElement !== $("brief-time") && document.activeElement !== $("brief-days")) {
+      $("brief-time").value = briefInfo.prefs.time;
+      $("brief-days").value = briefInfo.prefs.days;
+    }
+    $("brief-note").textContent = !passValid()
+      ? "Sign in once with your Mac online to turn this on."
+      : on ? `Your briefing arrives at ${briefInfo.prefs.time}${briefInfo.prefs.place ? ` with ${briefInfo.prefs.place.name}'s weather` : ""}. Reminders from Echo arrive as notifications too.`
+        : "A notification each morning with your weather, calendar, email that needs you and what's happening nearby. Uses your weather location.";
+  }
+  async function saveBriefPrefs(extra = {}) {
+    const pl = place();
+    const r = await cloudApi("/cloud/briefing/prefs", { prefs: {
+      time: $("brief-time").value || "07:00", days: $("brief-days").value, tz: localTz(),
+      place: pl ? { name: pl.name, lat: pl.lat, lon: pl.lon } : null, ...extra,
+    } });
+    briefInfo = { ...(briefInfo || {}), prefs: r.prefs };
+    renderBriefSettings();
+  }
+  const sameKey = (sub, key) => { try { return b64.fromBuf(sub.options.applicationServerKey) === key; } catch { return false; } };
+  /** Ask for permission (inside the tap), subscribe, and tell the relay where to send. */
+  async function enableNotifications() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      throw new Error(standalone ? "This iPhone can't show notifications from Echo. Update iOS and try again." : "Open Echo from your Home Screen to allow notifications.");
+    }
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") throw new Error("Notifications are off for Echo. Turn them on in Settings › Notifications › Echo.");
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await cloudApi("/cloud/push/key");
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !sameKey(sub, key)) { await sub.unsubscribe(); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64.toBuf(key) });
+    await cloudApi("/cloud/push/subscribe", { subscription: sub.toJSON() });
+    briefInfo = { ...(briefInfo || {}), subscribed: true };
+  }
+  $("sw-brief").addEventListener("click", async () => {
+    if (!passValid()) return toast("Sign in once with your Mac online first.", true);
+    const on = $("sw-brief").getAttribute("aria-checked") === "true";
+    try {
+      if (on) {
+        await saveBriefPrefs({ on: false });
+        await cloudApi("/cloud/push/unsubscribe", {});
+        briefInfo.subscribed = false;
+        renderBriefSettings();
+        return toast("Briefing and reminders are off");
+      }
+      await enableNotifications();
+      await saveBriefPrefs({ on: true });
+      toast(`Your briefing arrives at ${$("brief-time").value}`);
+      if (!place()) { toast("Set your weather location for weather and nearby alerts."); openSheet("sheet-place"); }
+    } catch (e) { toast(e.message || cloudProblem(e), true); renderBriefSettings(); }
+  });
+  for (const id of ["brief-time", "brief-days"]) {
+    $(id).addEventListener("change", () => { if (briefInfo && briefInfo.prefs && briefInfo.prefs.on) saveBriefPrefs().then(() => toast(`Briefing at ${$("brief-time").value}`)).catch((e) => toast(cloudProblem(e), true)); });
+  }
+  $("push-test").addEventListener("click", async () => {
+    try { await cloudApi("/cloud/push/test", {}); toast("Sent. Check your notifications."); }
+    catch (e) { toast(cloudProblem(e), true); }
+  });
+  $("brief-open").addEventListener("click", () => openBriefing());
+  $("brief-refresh").addEventListener("click", () => briefNow());
+
+  const todayLocal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  function openBriefing() {
+    if (!passValid()) return toast("Sign in once with your Mac online to get briefings.", true);
+    show("briefing");
+    const latest = briefInfo && briefInfo.latest;
+    renderBriefing(latest);
+    if (!latest || latest.date !== todayLocal()) briefNow();
+  }
+  async function briefNow() {
+    const btn = $("brief-refresh");
+    btn.setAttribute("aria-busy", "true");
+    try {
+      const pl = place();
+      const r = await cloudApi("/cloud/briefing/now", { prefs: { tz: localTz(), ...(pl ? { place: { name: pl.name, lat: pl.lat, lon: pl.lon } } : {}) } });
+      briefInfo = { ...(briefInfo || {}), latest: r.briefing };
+      renderBriefing(r.briefing);
+    } catch (e) { toast(cloudProblem(e), true); }
+    finally { btn.removeAttribute("aria-busy"); }
+  }
+  function bcard(title, ...nodes) {
+    const c = el("section", "glass bcard");
+    c.appendChild(el("h3", "", title));
+    for (const n of nodes) if (n) c.appendChild(n);
+    return c;
+  }
+  function blist(items) {
+    const ul = el("ul");
+    for (const [t, text] of items) { const li = el("li"); if (t) li.appendChild(el("span", "t", t)); li.appendChild(el("span", "", text)); ul.appendChild(li); }
+    return ul;
+  }
+  function renderBriefing(b) {
+    const box = $("brief-body");
+    clear(box);
+    if (!b) { const l = el("div", "glass list"); l.appendChild(el("p", "sub empty", "Getting today's briefing…")); box.appendChild(l); return; }
+    box.appendChild(el("p", "brief-date", `${new Date(b.at).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })} · ${clock(b.at)}`));
+    if (b.weather) box.appendChild(bcard(b.place || "Weather", el("div", "big", `${b.weather.temp}° ${b.weather.text}`), el("p", "sub small", `High ${b.weather.high}°, low ${b.weather.low}°.${b.weather.tip ? ` ${b.weather.tip}` : ""}`)));
+    else box.appendChild(bcard("Weather", el("p", "sub small", b.place ? "Weather isn't available right now." : "Set your weather location in Settings for weather and nearby alerts.")));
+    const asOf = b.macAsOf ? el("p", "fine", `From your Mac, as of ${clock(b.macAsOf)}${new Date(b.macAsOf).toDateString() !== new Date(b.at).toDateString() ? " yesterday" : ""}`) : null;
+    if (b.calendar) box.appendChild(bcard("Calendar", b.calendar.length ? blist(b.calendar.map((e) => [e.time, e.title])) : el("p", "sub small", "Nothing on your calendar today."), asOf));
+    else box.appendChild(bcard("Calendar", el("p", "sub small", "Your Mac hasn't shared your calendar yet. It does within a minute of Echo connecting.")));
+    if (b.email && b.email.length) box.appendChild(bcard("Needs you", blist(b.email.map((m) => [null, `${m.from} — ${m.subject}`]))));
+    if (b.reminders && b.reminders.length) box.appendChild(bcard("Reminders", blist(b.reminders.map((r) => [r.time, r.text]))));
+    if (b.near) {
+      const near = [...b.near.quakes.map((q) => [null, `Earthquake M${q.magnitude.toFixed(1)}, ${q.place}${q.tsunami ? " (tsunami flag)" : ""}`]), ...b.near.storms.map((st) => [null, `${st.title} (${st.type})`])];
+      box.appendChild(bcard("Near you", near.length ? blist(near) : el("p", "sub small", "No earthquakes or storms within 500 km."), b.world ? el("p", "fine", `Elsewhere: ${b.world.zone.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase())} — ${b.world.headline}`) : null));
+    }
+    const done = (b.missions || []).map((m) => [null, `${m.status === "failed" ? "Failed" : "Finished"}: ${m.goal}`]);
+    box.appendChild(bcard("Your Mac", done.length ? blist(done) : el("p", "sub small", "Nothing finished overnight."), el("p", "fine", b.macOnline ? "Online now." : "Offline right now.")));
+  }
+  // A notification opens its page: the briefing, or the chat for a reminder.
+  function openFromUrl(url) {
+    try {
+      const v = new URL(url, location.origin).searchParams.get("view");
+      if (v === "briefing") openBriefing(); else if (v === "chat") show("chat");
+    } catch { /* not ours */ }
+  }
+  if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "open") openFromUrl(e.data.url); });
 
   // ---------- brain ----------
   function renderBrain(d) {
@@ -1254,5 +1401,5 @@
   if (T && S) { start(); enter(); }
   else if (mode === "phone" && passValid()) enter();
   else prepareSignIn();
-  refreshCloud();
+  refreshCloud().then(() => { if (params.get("view") && currentView !== "signin") openFromUrl(location.href); });
 })();

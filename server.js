@@ -38,6 +38,8 @@ import { createGemini } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
 import { ensureSchedule } from "./lib/tick.js";
+import { vapidKeys, sendPush, validSubscription } from "./lib/push.js";
+import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick } from "./lib/briefing.js";
 
 export const POLL_MS = 25_000;          // how long Echo's "anything for me?" is held open
 export const REQUEST_MS = 30_000;       // how long a phone request may wait for Echo's answer
@@ -120,6 +122,7 @@ export function summariseWorld({ conflicts, earthquakes, fires, weather }, now =
 export function createRelay({
   secret, now = () => Date.now(), fetchJson = defaultFetchJson, pollMs = POLL_MS, requestMs = REQUEST_MS,
   gemini = null, store = null, limits = {},
+  publicUrl = "https://echo-phone.onrender.com", pushFetch = fetch, pushAnyHost = false,
 } = {}) {
   if (!secret || secret.length < 32) throw new Error("RELAY_SECRET must be set (at least 32 characters).");
   const secretBuf = Buffer.from(secret);
@@ -137,6 +140,36 @@ export function createRelay({
     if (!(Number.isInteger(n) && n > passGen)) return;
     passGen = n;
     await store.setCount("passgen", n).catch(() => {});
+  }
+  const vapid = vapidKeys(secret);
+  /**
+   * Each phone's notification subscription, briefing settings and reminders,
+   * sealed under one store key. Changes go through one at a time.
+   */
+  let phonesLock = Promise.resolve();
+  function withPhones(fn, { save = true } = {}) {
+    const run = phonesLock.then(async () => {
+      const phones = (await store.get("phones")) ?? { devices: {} };
+      phones.devices ??= {};
+      const result = await fn(phones);
+      if (save) await store.set("phones", phones);
+      return result;
+    });
+    phonesLock = run.catch(() => {});
+    return run;
+  }
+  const deviceOf = (phones, id) => (phones.devices[id] ??= { sub: null, prefs: { ...DEFAULT_PREFS }, lastBrief: "", reminders: [] });
+  const push = (sub, message) => sendPush(sub, message, { vapid, contact: publicUrl, fetchImpl: pushFetch, now: now() });
+  const briefingTools = { weather: getWeather, worldRaw: async () => (await getWorld()).raw };
+  let ticking = null;
+  /** The timed work: due reminders and briefings. Never two at once. */
+  function tick() {
+    ticking ??= withPhones((phones) => runTick({
+      phones, now: now(), tools: briefingTools, macOnline: online(), push,
+      digest: () => store.get("digest").catch(() => null),
+      storeBriefing: (id, b) => store.set(`brief:${id}`, b, 3 * 86400),
+    })).catch(() => false).finally(() => { ticking = null; });
+    return ticking;
   }
   const cloudHits = new Map();
   /**
@@ -336,6 +369,26 @@ export function createRelay({
     for (const job of [...inFlight.values(), ...queue]) job.respond(503, { "content-type": "application/json" }, gone);
   }
 
+  /** What the Mac leaves for the morning briefing (Echo's phone-digest.ts), kept sealed for a week. */
+  async function agentDigest(req, res) {
+    try {
+      const d = await readJson(req, 64 * 1024);
+      const str = (v, n) => String(v ?? "").slice(0, n);
+      const digest = {
+        at: now(),
+        calendar: Array.isArray(d.calendar) ? d.calendar.slice(0, 40).map((e) => ({ title: str(e.title, 120), start: str(e.start, 40) })) : null,
+        email: Array.isArray(d.email) ? d.email.slice(0, 10).map((e) => ({ from: str(e.from, 80), subject: str(e.subject, 160) })) : null,
+        missions: Array.isArray(d.missions) ? d.missions.slice(0, 10).map((m) => ({ goal: str(m.goal, 160), status: str(m.status, 20), at: Number(m.at) || now() })) : [],
+      };
+      const old = await store.get("digest").catch(() => null);
+      // A reading the Mac skipped this hour keeps the last one it made.
+      if (!digest.calendar && old?.calendar) digest.calendar = old.calendar;
+      if (!digest.email && old?.email) digest.email = old.email;
+      await store.set("digest", digest, 7 * 86400);
+      send(res, 204, "");
+    } catch { send(res, 400, { error: "bad digest" }); }
+  }
+
   async function agentReply(req, res) {
     lastPoll = now();
     let reply;
@@ -382,7 +435,64 @@ export function createRelay({
         macOnline: online(), usage: cloud ? await cloud.usage().catch(() => null) : null, passExpires: claims.exp,
       });
     }
+    const device = claims.device;
+    if (req.method === "GET") {
+      if (path === "/cloud/push/key") return send(res, 200, { key: vapid.publicKey });
+      if (path === "/cloud/briefing") {
+        const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
+        return send(res, 200, { prefs: dev.prefs, subscribed: Boolean(dev.sub), latest: await store.get(`brief:${device}`).catch(() => null) });
+      }
+      if (path === "/cloud/reminders") {
+        const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
+        return send(res, 200, { reminders: (dev.reminders ?? []).filter((r) => !r.sent).sort((x, y) => x.at - y.at) });
+      }
+      return send(res, 404, "Not found");
+    }
     if (req.method !== "POST") return send(res, 404, "Not found");
+    if (path.startsWith("/cloud/push/") || path.startsWith("/cloud/briefing") || path.startsWith("/cloud/reminders")) {
+      try {
+        const body = await readJson(req, 16 * 1024);
+        if (path === "/cloud/push/subscribe") {
+          const sub = body.subscription;
+          if (!validSubscription(sub) && !(pushAnyHost && sub?.endpoint)) return send(res, 400, { error: "input", message: "That notification subscription isn't valid." });
+          await withPhones((phones) => { deviceOf(phones, device).sub = { endpoint: String(sub.endpoint), keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } }; });
+          return send(res, 200, { ok: true });
+        }
+        if (path === "/cloud/push/unsubscribe") {
+          await withPhones((phones) => { deviceOf(phones, device).sub = null; });
+          return send(res, 200, { ok: true });
+        }
+        if (path === "/cloud/push/test") {
+          const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
+          if (!dev.sub) return send(res, 409, { error: "input", message: "Notifications aren't on for this phone yet." });
+          const r = await push(dev.sub, { title: "Echo", body: "Notifications are on. Your briefing and reminders will arrive here.", url: "/", tag: "test" });
+          if (r.gone) await withPhones((phones) => { deviceOf(phones, device).sub = null; });
+          return send(res, r.ok ? 200 : 502, { ok: r.ok, message: r.ok ? "Sent." : r.gone ? "This phone's notifications were turned off. Turn them on again." : "Apple didn't accept it. Try again." });
+        }
+        if (path === "/cloud/briefing/prefs") {
+          const prefs = await withPhones((phones) => { const dev = deviceOf(phones, device); dev.prefs = cleanPrefs(body.prefs ?? {}, dev.prefs); return dev.prefs; });
+          return send(res, 200, { prefs });
+        }
+        if (path === "/cloud/briefing/now") {
+          const dev = await withPhones((phones) => { const d = deviceOf(phones, device); d.prefs = cleanPrefs(body.prefs ?? {}, d.prefs); return d; });
+          const b = await buildBriefing({ prefs: dev.prefs, dev, now: now(), tools: briefingTools, digest: await store.get("digest").catch(() => null), macOnline: online() });
+          await store.set(`brief:${device}`, b, 3 * 86400).catch(() => {});
+          return send(res, 200, { briefing: b });
+        }
+        if (path === "/cloud/reminders") {
+          const r = await withPhones((phones) => addReminder(deviceOf(phones, device), body, now(), randomUUID().slice(0, 8)));
+          return send(res, 200, { reminder: r });
+        }
+        if (path === "/cloud/reminders/cancel") {
+          await withPhones((phones) => { const d = deviceOf(phones, device); d.reminders = (d.reminders ?? []).filter((r) => r.id !== body.id); });
+          return send(res, 200, { ok: true });
+        }
+      } catch (e) {
+        if (e?.input) return send(res, 400, { error: "input", message: e.message });
+        return sendCloudError(res, e);
+      }
+      return send(res, 404, "Not found");
+    }
     if (path === "/cloud/signout-all") {
       await raisePassGen(passGen + 1);
       return send(res, 200, { ok: true });
@@ -406,7 +516,7 @@ export function createRelay({
           if (!/^[A-Za-z0-9+/=]{100,}$/.test(audio)) return send(res, 400, { error: "input", message: "That recording didn't come through." });
           result = await cloud.chat({ history: body.history, audio, context });
         } else result = await cloud.chat({ history: body.history, text: body.text, context });
-        for (const a of result.actions) if (a.type === "calendar" && validEvent(a.data)) a.url = icsUrl(a.data);
+        for (const a of result.actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
         return send(res, 200, result);
       } catch (e) { return sendCloudError(res, e); }
     }
@@ -416,8 +526,8 @@ export function createRelay({
   async function cronTick(req, res) {
     const given = Buffer.from(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
     if (given.length !== cronBuf.length || !timingSafeEqual(given, cronBuf)) return send(res, 404, "Not found");
-    // Timed work (the briefing, reminders) joins here in later updates.
     await store.setCount("tick:last", now()).catch(() => {});
+    await tick();
     return send(res, 200, { ok: true, at: now() });
   }
 
@@ -439,7 +549,7 @@ export function createRelay({
   const handler = (req, res) => {
     const url = new URL(req.url ?? "/", "http://relay");
     const path = url.pathname;
-    if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory" } });
+    if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
     if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
     if (path === "/cron/tick" && req.method === "POST") return void cronTick(req, res);
     const ics = /^\/ics\/(v1\.[A-Za-z0-9_-]{20,4000})\.ics$/.exec(path);
@@ -465,8 +575,9 @@ export function createRelay({
         .then((d) => send(res, 200, { results: (d?.results ?? []).map((r) => ({ name: r.name, country: r.country ?? "", admin: r.admin1 ?? "", lat: r.latitude, lon: r.longitude })) }))
         .catch(() => send(res, 502, { error: "Search is unavailable right now." }));
     }
-    if (path === "/agent/poll" || path === "/agent/reply") {
+    if (path === "/agent/poll" || path === "/agent/reply" || path === "/agent/digest") {
       if (!agentAuthorized(req)) return send(res, 404, "Not found");
+      if (path === "/agent/digest" && req.method === "POST") return void agentDigest(req, res);
       if (path === "/agent/poll" && req.method === "GET") return agentPoll(req, res);
       if (path === "/agent/reply" && req.method === "POST") return agentReply(req, res);
       return send(res, 404, "Not found");
@@ -475,7 +586,7 @@ export function createRelay({
     if (req.method === "GET") return serveStatic(res, path);
     send(res, 404, "Not found");
   };
-  return { handler, keys, state: () => ({ online: online(), queued: queue.length, waiting: waiters.length, inFlight: inFlight.size, passGen }) };
+  return { handler, keys, tick, vapid, state: () => ({ online: online(), queued: queue.length, waiting: waiters.length, inFlight: inFlight.size, passGen }) };
 }
 
 async function defaultFetchJson(url) {
@@ -496,7 +607,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const store = createStore({ url: env.UPSTASH_REDIS_REST_URL, token: env.UPSTASH_REDIS_REST_TOKEN, key: keys.store });
   const gemini = paired && env.GEMINI_API_KEY ? createGemini({ apiKey: env.GEMINI_API_KEY.trim(), model: (env.GEMINI_MODEL || "gemini-3.1-flash-lite").trim(), base: env.GEMINI_BASE || undefined }) : null;
   const relay = createRelay({
-    secret: relaySecret, store, gemini,
+    secret: relaySecret, store, gemini, publicUrl: env.RENDER_EXTERNAL_URL || "https://echo-phone.onrender.com",
     limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200 },
   });
   console.log(`Phone mode: brain ${gemini ? gemini.model : "off (no GEMINI_API_KEY)"}, store ${store.remote ? "Upstash" : "memory only (no UPSTASH_REDIS_REST_URL/TOKEN)"}`);
@@ -514,6 +625,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     return relay.handler(req, res);
   };
   if (!paired) console.error("RELAY_SECRET is missing or shorter than 32 characters: running unpaired.");
+  // Timed work also runs every minute while the relay is awake, so reminders are
+  // on time even between the scheduler's 5-minute wake-ups.
+  if (paired) setInterval(() => { void relay.tick(); }, 60_000).unref();
   const server = http.createServer(handler);
   // Long polls outlive Node's default timeouts; keep the socket open for them.
   server.requestTimeout = 0;
