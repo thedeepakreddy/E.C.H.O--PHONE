@@ -865,7 +865,7 @@ export function createRelay({
   let selfTest = null;
   function browseSelfTest() {
     if (selfTest && now() - selfTest.at < 60_000) return selfTest.result;
-    const sites = ["https://en.wikipedia.org/wiki/Budapest", SEARCH_URL("budapest"), "https://www.bing.com/search?q=budapest", "https://www.mojeek.com/search?q=budapest", "https://search.brave.com/search?q=budapest"];
+    const sites = ["https://en.wikipedia.org/wiki/Budapest", SEARCH_URL("budapest"), "https://html.duckduckgo.com/html/?q=budapest", "https://news.ycombinator.com/"];
     const result = Promise.all(sites.map(async (u) => {
       const t0 = Date.now();
       try {
@@ -919,6 +919,9 @@ export function createRelay({
       } catch (e) {
         if (t.kind !== "r") console.log(`[browse] ${t.kind} ${new URL(target).hostname} failed: ${e?.code ?? e?.message ?? e}`);
         if (t.kind === "r") return send(res, 502, "");
+        // DuckDuckGo often doesn't answer servers at all: the same search on Bing.
+        const q = new URL(target).hostname === "html.duckduckgo.com" ? new URL(target).searchParams.get("q") : null;
+        if (q) return redirect(res, proxyPath("p", SEARCH_URL(q)));
         const why = e?.code === "EBLOCKED" ? "Echo's Browser only opens public websites." : e?.code === "ENOTFOUND" ? "That site doesn't exist, or its address is mistyped." : e?.code === "ETIMEDOUT" ? "The site took too long to answer." : "The site couldn't be reached.";
         return sendPage(res, 200, notePage("Couldn't open that page", why, target));
       }

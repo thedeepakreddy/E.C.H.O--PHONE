@@ -29,6 +29,8 @@ test("addresses: http(s) only; what isn't an address is a search", () => {
   assert.equal(addressOrSearch("best pizza budapest"), SEARCH_URL("best pizza budapest"));
   assert.deepEqual(fromProxyPath(proxyPath("p", "https://ex.com/a?b=1")), { kind: "p", url: "https://ex.com/a?b=1" });
   assert.equal(fromProxyPath(`/b/p/${Buffer.from("javascript:alert(1)").toString("base64url")}`), null);
+  const wrapped = `https://www.bing.com/ck/a?!&&p=abc&u=a1${Buffer.from("https://en.wikipedia.org/wiki/Budapest").toString("base64url")}&ntb=1`;
+  assert.ok(rewriteHtml(`<a href="${wrapped.replace(/&/g, "&amp;")}">r</a>`, "https://www.bing.com/search?q=b").html.includes(proxyPath("p", "https://en.wikipedia.org/wiki/Budapest")), "Bing's tracking link goes straight to the result");
   assert.equal(sensitiveHost("www.paypal.com"), true);
   assert.equal(sensitiveHost("netbank.otpbank.hu"), true);
   assert.equal(sensitiveHost("en.wikipedia.org"), false);

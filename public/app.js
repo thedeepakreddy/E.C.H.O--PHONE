@@ -1839,7 +1839,7 @@
     box.appendChild(el("p", "sub small", problem || "Search or open a site above. Ask Echo to finish what you started, or give it a whole job: \"compare these three laptops\", \"find a table for two on Friday\"."));
     if (problem) return;
     const quick = el("div", "br-quick");
-    for (const [label, url] of [["DuckDuckGo", "https://html.duckduckgo.com/html/"], ["Wikipedia", "https://en.m.wikipedia.org/"], ["BBC News", "https://www.bbc.com/news"], ["Hacker News", "https://news.ycombinator.com/"]]) {
+    for (const [label, url] of [["Bing", "https://www.bing.com/"], ["Wikipedia", "https://en.m.wikipedia.org/"], ["BBC News", "https://www.bbc.com/news"], ["Hacker News", "https://news.ycombinator.com/"]]) {
       const b = el("button", "glass chip", label); b.addEventListener("click", () => goTo(url)); quick.appendChild(b);
     }
     box.appendChild(quick);
