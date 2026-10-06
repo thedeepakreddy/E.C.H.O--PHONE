@@ -53,6 +53,7 @@
     </div>
     <p id="signin-err" class="err" role="alert"></p>
   </form>
+  <button class="glass big-btn" id="use-phone" hidden>Use Echo on your phone</button>
   <div id="no-link" class="glass sheet-card notice" hidden>
     <h2>Open your Echo link once</h2>
     <p class="sub">This app needs the private link from your Mac. Send <b>/link</b> to Echo on Telegram, then paste it here.</p>
@@ -70,11 +71,15 @@
   <div class="hero-fade" aria-hidden="true"></div>
   <header class="top">
     <div><p class="sub small" id="greeting">Hello</p><h1>Echo</h1></div>
-    <div class="glass pill" id="mac-pill"><span class="dot" id="mac-dot"></span><span id="mac-name">Your Mac</span></div>
+    <button class="glass pill" id="mac-pill" aria-label="Where Echo runs: tap to change"><span class="dot" id="mac-dot"></span><span id="mac-name">Your Mac</span></button>
   </header>
   <!-- The live humanoid from Echo's control panel, drawn by humanoid-core.js. -->
   <div class="hero-stage"><canvas id="core-canvas" role="img" aria-label="Echo, live"></canvas></div>
   <div class="home-stack">
+    <div class="glass banner" id="home-banner" role="status" hidden>
+      <p><b class="bn-title"></b><span class="sub small bn-text"></span></p>
+      <div class="btns2"><button class="glass big-btn bn-no">Not now</button><button class="cta big-btn bn-yes"></button></div>
+    </div>
     <div class="glass pill state-pill"><span class="dot pulse" id="state-dot"></span><b id="state-label">CONNECTING</b><span class="sub" id="brain-name"></span></div>
     <div class="actions">
       <button class="act" id="act-listen" aria-pressed="false"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></span>Listen</button>
@@ -94,10 +99,10 @@
         <span><span class="small clamp1" id="approval-mini">—</span><span class="sub tiny">Tap to review</span></span>
       </button>
       <div class="glass card stats-card" id="stats-card">
-        <div><b id="s-cmd">0</b><span class="sub tiny">Commands</span></div>
-        <div><b id="s-tools">0</b><span class="sub tiny">Tool calls</span></div>
-        <div><b id="s-done">0</b><span class="sub tiny">Done</span></div>
-        <div><b id="s-err">0</b><span class="sub tiny">Errors</span></div>
+        <div><b id="s-cmd">0</b><span class="sub tiny" id="s-cmd-l">Commands</span></div>
+        <div><b id="s-tools">0</b><span class="sub tiny" id="s-tools-l">Tool calls</span></div>
+        <div><b id="s-done">0</b><span class="sub tiny" id="s-done-l">Done</span></div>
+        <div><b id="s-err">0</b><span class="sub tiny" id="s-err-l">Errors</span></div>
       </div>
     </div>
     <div class="glass strip" id="activity-strip"><span class="dot pulse cyan"></span><span class="clamp1" id="activity-line">Waiting for Echo…</span></div>
@@ -111,6 +116,10 @@
     <div><b>Echo</b><span class="presence" id="presence">online</span></div>
     <button class="bubble b44" id="chat-talk" aria-label="Talk to Echo"><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></button>
   </header>
+  <div class="glass banner" id="chat-banner" role="status" hidden>
+      <p><b class="bn-title"></b><span class="sub small bn-text"></span></p>
+      <div class="btns2"><button class="glass big-btn bn-no">Not now</button><button class="cta big-btn bn-yes"></button></div>
+    </div>
   <main class="messages" id="messages" aria-live="polite" aria-label="Conversation"></main>
   <div class="chips" id="chips">
     <button class="glass chip">Status of my tasks</button>
@@ -176,6 +185,14 @@
       <button class="row" role="switch" aria-checked="false" id="sw-faceid"><span class="grow">Unlock with Face ID</span><span class="track"><span class="knob"></span></span></button>
       <button class="row" role="switch" aria-checked="true" id="sw-speak"><span class="grow">Read Echo's replies aloud</span><span class="track"><span class="knob"></span></span></button>
     </div>
+    <p class="group-title">Phone mode</p>
+    <div class="glass list">
+      <button class="row" id="set-mode-row"><span class="grow">Where Echo runs</span><span class="sub" id="set-mode">Mac</span><span class="chev" aria-hidden="true"></span></button>
+      <div class="row"><span class="grow">Echo on your phone</span><span class="sub small" id="set-cloud">—</span></div>
+      <button class="row" role="switch" aria-checked="false" id="sw-auto"><span class="grow">Switch to Phone when the Mac goes offline</span><span class="track"><span class="knob"></span></span></button>
+      <div class="row col-row"><label for="set-shortcuts" class="small">Shortcuts Echo may run</label>
+        <input id="set-shortcuts" class="row-input" placeholder="Names, separated by commas" autocomplete="off" autocapitalize="words" enterkeyhint="done"></div>
+    </div>
     <p class="group-title">Voice at the Mac</p>
     <div class="glass list">
       <button class="row" role="switch" aria-checked="false" data-voice="ttsEnabled"><span class="grow">Spoken replies</span><span class="track"><span class="knob"></span></span></button>
@@ -186,6 +203,7 @@
     <div class="glass list">
       <div class="row"><span class="grow">API keys</span><span class="sub small row-i"><svg class="i13" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>On your Mac only</span></div>
       <button class="row" id="sign-out"><span class="grow">Sign out of this phone</span></button>
+      <button class="row" id="signout-all"><span class="grow">Sign out every phone</span></button>
       <button class="row danger-row" id="power-btn">Power off Echo…</button>
     </div>
     <p class="sub tiny foot" id="version-line">Echo Remote</p>
@@ -259,6 +277,21 @@
   <div class="glass inset"><p class="sub tiny caps">On your Mac</p><p class="mono" id="ap-text"></p></div>
   <div class="btns2"><button class="glass big-btn" id="ap-deny">Deny</button><button class="cta big-btn" id="ap-approve">Approve</button></div>
   <p class="sub tiny center">If you don't answer, Echo won't do it.</p>
+</section>
+<section class="glass sheet" id="sheet-mode" role="dialog" aria-modal="true" aria-labelledby="mode-title" hidden>
+  <span class="grabber" aria-hidden="true"></span>
+  <h2 id="mode-title">Where should Echo run?</h2>
+  <div role="radiogroup" aria-labelledby="mode-title" class="mode-list">
+    <button class="glass mode-opt" role="radio" aria-checked="true" id="mode-mac">
+      <span class="ico ico-cyan" aria-hidden="true"><svg class="i16" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
+      <span class="grow"><b>Mac</b><span class="sub small">Echo on your Mac: screen, apps, files, coding.</span><span class="sub tiny" id="mode-mac-status"></span></span>
+    </button>
+    <button class="glass mode-opt" role="radio" aria-checked="false" id="mode-phone">
+      <span class="ico ico-violet" aria-hidden="true"><svg class="i16" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></span>
+      <span class="grow"><b>Phone</b><span class="sub small">Echo in the cloud: answers, search, reminders. Works with the Mac off.</span><span class="sub tiny" id="mode-phone-status"></span></span>
+    </button>
+  </div>
+  <button class="glass big-btn" data-close>Done</button>
 </section>
 <section class="glass sheet" id="sheet-power" role="dialog" aria-modal="true" aria-labelledby="po-title" hidden>
   <span class="grabber" aria-hidden="true"></span>

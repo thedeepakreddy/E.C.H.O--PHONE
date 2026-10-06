@@ -86,6 +86,24 @@
   let T = params.get("t");
   if (T && /^[0-9a-f]{32}$/.test(T)) store.set("echo_t", T); else T = store.get("echo_t");
   let S = store.get("echo_s") || "";
+
+  // ---------- Phone mode: this phone's id, its cloud pass, where Echo runs ----------
+  // The Mac signs a cloud pass for this phone when it signs in; with it, Phone
+  // mode (Echo in the cloud) works even while the Mac is off. It can't reach the Mac.
+  let DEV = store.get("echo_dev");
+  if (!DEV || !/^[0-9a-f]{32}$/.test(DEV)) {
+    DEV = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+    store.set("echo_dev", DEV);
+  }
+  let PASS = store.get("echo_pass") || "";
+  function passClaims() {
+    try { return JSON.parse(atob(PASS.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); } catch { return null; }
+  }
+  const passValid = () => { const c = passClaims(); return !!c && c.exp * 1000 > Date.now(); };
+  const passFresh = () => { const c = passClaims(); return !!c && Date.now() - c.iat * 1000 < 86400_000; };
+  function savePass(p) { if (typeof p === "string" && p.startsWith("cp1.")) { PASS = p; store.set("echo_pass", p); } }
+  let mode = store.get("echo_mode") === "phone" ? "phone" : "mac";
+  let macOnline = false, macOfflineSince = 0, cloudInfo = null, cloudBusy = false, macChip = "Your Mac";
   const u = (p) => `${p}${p.includes("?") ? "&" : "?"}t=${T}${S ? `&s=${S}` : ""}`;
 
   async function api(path, { json, body: payload, method, raw, quiet } = {}) {
@@ -105,6 +123,7 @@
   const TABS = ["home", "chat", "missions", "world", "settings"];
   let currentView = "signin", lastTab = store.get("echo_tab") || "home";
   function show(view) {
+    if (view === "screen" && !(S && macOnline)) { toast("That needs your Mac, and it's offline right now.", true); return; }
     currentView = view;
     body.dataset.view = view;
     for (const v of document.querySelectorAll(".view")) v.hidden = v.id !== `v-${view}`;
@@ -152,32 +171,43 @@
     if (!T) { $("signin-form").hidden = true; $("no-link").hidden = false; return; }
     $("signin-form").hidden = false; $("no-link").hidden = true;
     $("faceid-login").hidden = true; $("signin-or").hidden = true;
+    $("use-phone").hidden = !passValid();
     if (!faceIdAllowed()) return;
     try {
       const r = await fetch(u("/passkey/options?purpose=login"));
       if (r.ok) { $("faceid-login").hidden = false; $("signin-or").hidden = false; }
     } catch { /* offline: password only */ }
   }
+  function enter() { show(TABS.includes(lastTab) ? lastTab : "home"); renderMode(); }
   function signedIn(s) {
     S = s; store.set("echo_s", s);
     $("pw").value = ""; $("signin-err").textContent = "";
     start();
-    show(TABS.includes(lastTab) ? lastTab : "home");
+    enter();
+    refreshCloud();
   }
-  function signedOut(message) {
+  /** Signed out of the Mac. `full` also forgets the cloud pass (Sign out of this phone). */
+  function signedOut(message, { full = false } = {}) {
     S = ""; store.set("echo_s", null);
     stopPolling();
+    if (full) { PASS = ""; store.set("echo_pass", null); cloudInfo = null; }
+    if (!full && mode === "phone" && passValid()) {
+      macOnline = false; renderMode();
+      toast("Signed out of your Mac. Echo on your phone still works.");
+      return;
+    }
     prepareSignIn();
     if (message) $("signin-err").textContent = message;
   }
+  $("use-phone").addEventListener("click", () => { setMode("phone"); enter(); refreshCloud(); });
   $("signin-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const pw = $("pw").value;
     if (!pw) { $("signin-err").textContent = "Enter your password."; return; }
     try {
-      const r = await fetch(u("/login"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: pw }) });
+      const r = await fetch(u("/login"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: pw, device: DEV }) });
       const d = await r.json().catch(() => ({}));
-      if (r.ok && d.s) return signedIn(d.s);
+      if (r.ok && d.s) { savePass(d.cloudPass); return signedIn(d.s); }
       $("signin-err").textContent = r.status === 401 ? "That password isn't right." : r.status === 429 ? d.error : r.status === 503 ? "Your Mac is offline. Echo must be running." : r.status === 404 ? "This link isn't valid any more." : "Couldn't sign in.";
     } catch { $("signin-err").textContent = "No connection."; }
   });
@@ -200,9 +230,9 @@
         challenge: b64.toBuf(o.challenge), rpId: o.rpId, userVerification: "required", timeout: o.timeout,
         allowCredentials: (o.allowCredentials || []).map((c) => ({ type: "public-key", id: b64.toBuf(c.id) })),
       } });
-      const r = await fetch(u("/passkey/login"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ credential: encodeAssertion(cred) }) });
+      const r = await fetch(u("/passkey/login"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ credential: encodeAssertion(cred), device: DEV }) });
       const d = await r.json().catch(() => ({}));
-      if (r.ok && d.s) return signedIn(d.s);
+      if (r.ok && d.s) { savePass(d.cloudPass); return signedIn(d.s); }
       $("signin-err").textContent = d.error || "Face ID didn't work. Use your password.";
     } catch (err) {
       if (err && err.name !== "NotAllowedError") $("signin-err").textContent = "Face ID isn't available. Use your password.";
@@ -248,7 +278,9 @@
     loadWeather();
   }
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && S) { started = false; start(); }
+    if (document.hidden) return;
+    if (S) { started = false; start(); }
+    refreshCloud();
   });
 
   // ---------- status ----------
@@ -259,43 +291,160 @@
   let last = null, offline = false, logsAfter = 0, lastActivity = "";
   async function pollStatus() {
     try {
-      const d = await api(`/status?logs=${logsAfter}`);
+      // Renew this phone's cloud pass about once a day while the Mac is reachable.
+      const d = await api(`/status?logs=${logsAfter}${passFresh() ? "" : `&pass=${DEV}`}`);
+      if (d.cloudPass) { const had = passValid(); savePass(d.cloudPass); if (!had) refreshCloud(); }
       offline = false;
       last = d;
       for (const l of d.logs || []) { logsAfter = Math.max(logsAfter, l.id); if (l.kind !== "user") lastActivity = l; }
-      renderHome(d);
+      macChip = (d.vitals && d.vitals.chip) ? d.vitals.chip.replace(/^Apple /, "Mac · ") : "Your Mac";
+      markMac(true);
       if (currentView === "missions") renderMissions(d);
       if (currentView === "brain") renderBrain(d);
       renderSettings(d);
     } catch (e) {
-      if (e.status === 503 || e.status === 504) { offline = true; renderOffline(); }
+      if (e.status === 503 || e.status === 504) { offline = true; markMac(false); }
       throw e;
     }
   }
-  function renderOffline() {
-    $("state-label").textContent = "MAC OFFLINE";
-    body.dataset.status = "asleep";
-    $("state-dot").style.background = "#ff8a8a";
-    $("mac-dot").className = "dot";
-    $("activity-line").textContent = "Your Mac is asleep, off, or Echo isn't running.";
-    $("presence").textContent = "offline";
-    $("mac-name").textContent = "Mac offline";
+  /** The Mac came or went: banners, the pill and the copy of Phone mode's chat. */
+  function markMac(on) {
+    // "Back" only after this phone actually saw it go away, not on the first answer after opening.
+    if (on && !macOnline) { dismissedBack = !macOfflineSince; dismissedOffline = false; macOfflineSince = 0; }
+    if (!on && !macOfflineSince) macOfflineSince = Date.now();
+    macOnline = on;
+    renderMode();
+    renderBanners();
+    if (on) syncToMac();
   }
-  function renderHome(d) {
+  const prettyModel = (m) => String(m || "").replace(/-preview.*$/, "").replace(/^gemini-/i, "Gemini ").replace(/-([a-z])/g, (_, c) => ` ${c.toUpperCase()}`).replace("Flash Lite", "Flash-Lite");
+  function cloudLine() {
+    if (!cloudInfo) return "Checking…";
+    if (!cloudInfo.ready) return "Not set up yet: add the Gemini key on Render";
+    const u = cloudInfo.usage;
+    return u ? `${prettyModel(cloudInfo.model)} · ${u.requests}${u.limit ? ` of ${u.limit}` : ""} requests today` : prettyModel(cloudInfo.model);
+  }
+  function setStats(list) {
+    [["s-cmd", "s-cmd-l"], ["s-tools", "s-tools-l"], ["s-done", "s-done-l"], ["s-err", "s-err-l"]].forEach(([v, l], i) => { $(v).textContent = list[i][0]; $(l).textContent = list[i][1]; });
+  }
+  function stateDot(color) { $("state-dot").style.background = color; $("state-dot").style.boxShadow = `0 0 12px ${color}`; }
+  /** Everything that depends on where Echo runs, painted in one place. */
+  function renderMode() {
+    const phone = mode === "phone";
+    body.dataset.mode = mode;
     const h = new Date().getHours();
     $("greeting").textContent = h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : h < 22 ? "Good evening" : "Good night";
+    $("mac-dot").className = phone ? "dot cloud" : macOnline ? "dot ok" : "dot";
+    $("mac-name").textContent = phone ? "Phone" : macOnline ? macChip : "Mac offline";
+    $("set-mode").textContent = phone ? "Phone" : "Mac";
+    $("mode-mac").setAttribute("aria-checked", String(!phone));
+    $("mode-phone").setAttribute("aria-checked", String(phone));
+    $("mode-phone").disabled = !passValid() && !phone;
+    $("mode-mac-status").textContent = macOnline ? "Online now" : "Offline right now";
+    $("mode-phone-status").textContent = passValid() ? cloudLine() : "Sign in once with your Mac online to turn this on.";
+    $("set-cloud").textContent = passValid() ? cloudLine() : "Sign in with the Mac online first";
+    if (phone) paintPhoneHome(); else if (macOnline && last) paintMacHome(last); else paintOffline();
+    renderTyping(chatTyping || cloudBusy);
+  }
+  function paintPhoneHome() {
+    const ready = !!(cloudInfo && cloudInfo.ready);
+    body.dataset.status = cloudBusy ? "thinking" : "idle";
+    $("state-label").textContent = cloudBusy ? "THINKING" : "ON YOUR PHONE";
+    stateDot(cloudBusy ? "#b98cff" : "#5ee7f5");
+    $("brain-name").textContent = !passValid() ? "Sign in with the Mac online" : ready ? prettyModel(cloudInfo.model) : cloudInfo ? "Not set up" : "";
+    const u = cloudInfo && cloudInfo.usage;
+    setStats([[u ? u.messages : "—", "Messages"], [u ? u.requests : "—", "Requests"], [u && u.limit ? Math.max(0, u.limit - u.requests) : "—", "Left today"], [macOnline ? "On" : "Off", "Mac"]]);
+    $("activity-line").textContent = lastCloudLine || (ready ? "Echo is answering from your phone." : cloudInfo ? "Phone mode needs the Gemini key on Render." : "Connecting…");
+  }
+  function paintMacHome(d) {
     const st = STATE[d.status] || STATE.idle;
     body.dataset.status = STATE[d.status] ? d.status : "idle"; // drives the humanoid and the reactor
     $("state-label").textContent = st[0];
-    $("state-dot").style.background = st[1];
-    $("state-dot").style.boxShadow = `0 0 12px ${st[1]}`;
+    stateDot(st[1]);
     $("brain-name").textContent = d.brain ? `${d.brain.label} · ${d.brain.model}` : "";
-    $("mac-dot").className = "dot ok";
-    $("mac-name").textContent = (d.vitals && d.vitals.chip) ? d.vitals.chip.replace(/^Apple /, "Mac · ") : "Your Mac";
     const a = d.analytics || {};
-    $("s-cmd").textContent = a.commands || 0; $("s-tools").textContent = a.toolCalls || 0;
-    $("s-done").textContent = a.completedTasks || 0; $("s-err").textContent = a.errors || 0;
+    setStats([[a.commands || 0, "Commands"], [a.toolCalls || 0, "Tool calls"], [a.completedTasks || 0, "Done"], [a.errors || 0, "Errors"]]);
     if (lastActivity) $("activity-line").textContent = `${lastActivity.text}`;
+  }
+  function paintOffline() {
+    const a = (last && last.analytics) || {};
+    setStats([[a.commands || 0, "Commands"], [a.toolCalls || 0, "Tool calls"], [a.completedTasks || 0, "Done"], [a.errors || 0, "Errors"]]);
+    $("state-label").textContent = "MAC OFFLINE";
+    body.dataset.status = "asleep";
+    stateDot("#ff8a8a");
+    $("brain-name").textContent = passValid() ? "Tap the pill to use Phone" : "";
+    $("activity-line").textContent = "Your Mac is asleep, off, or Echo isn't running.";
+  }
+
+  // ---------- where Echo runs ----------
+  function setMode(m) {
+    if (m === "phone" && !passValid()) return toast("Sign in once with your Mac online to turn on Phone mode.", true);
+    mode = m; store.set("echo_mode", m);
+    closeSheets();
+    renderMode(); renderBanners();
+    if (m === "phone") refreshCloud();
+    if (m === "mac" && !S) prepareSignIn();
+    toast(m === "phone" ? "Echo is on your phone" : "Echo is on your Mac");
+  }
+  $("mac-pill").addEventListener("click", () => { renderMode(); openSheet("sheet-mode"); });
+  $("set-mode-row").addEventListener("click", () => { renderMode(); openSheet("sheet-mode"); });
+  $("mode-mac").addEventListener("click", () => setMode("mac"));
+  $("mode-phone").addEventListener("click", () => setMode("phone"));
+  // "Your Mac is offline" (Mac mode) and "Your Mac is back" (Phone mode).
+  let dismissedOffline = false, dismissedBack = true;
+  function renderBanners(nudge = false) {
+    let b = null;
+    const offlineLong = !macOnline && macOfflineSince && Date.now() - macOfflineSince > 20_000;
+    if (mode === "mac" && !macOnline && passValid() && (offlineLong || nudge)) {
+      if (store.get("echo_autoswitch") === "on") { setMode("phone"); toast("Your Mac is offline, so Echo moved to your phone."); return; }
+      if (!dismissedOffline || nudge) b = { title: "Your Mac is offline.", text: "Use Echo on your phone until it's back?", yes: "Switch to Phone", go: () => setMode("phone"), no: () => { dismissedOffline = true; } };
+    } else if (mode === "phone" && macOnline && !dismissedBack) {
+      // Echo restarting on the Mac ends this phone's session there, so it may need a sign-in.
+      b = S
+        ? { title: "Your Mac is back.", text: "Echo can work on your Mac again.", yes: "Switch to Mac", go: () => { dismissedBack = true; setMode("mac"); }, no: () => { dismissedBack = true; } }
+        : { title: "Your Mac is back.", text: "Sign in to use it again, and to copy this chat over.", yes: "Sign in", go: () => { dismissedBack = true; prepareSignIn(); }, no: () => { dismissedBack = true; } };
+    }
+    for (const id of ["home-banner", "chat-banner"]) {
+      const n = $(id);
+      n.hidden = !b;
+      if (!b) continue;
+      n.querySelector(".bn-title").textContent = b.title;
+      n.querySelector(".bn-text").textContent = ` ${b.text}`;
+      n.querySelector(".bn-yes").textContent = b.yes;
+      n.querySelector(".bn-yes").onclick = () => { b.go(); renderBanners(); };
+      n.querySelector(".bn-no").onclick = () => { b.no(); renderBanners(); };
+    }
+  }
+  setInterval(() => { if (!document.hidden) renderBanners(); }, 5000);
+
+  // ---------- Phone mode: the cloud brain ----------
+  async function cloudApi(path, json, { signal } = {}) {
+    const r = await fetch(path, {
+      method: json ? "POST" : "GET",
+      headers: { "x-echo-pass": PASS, ...(json ? { "content-type": "application/json" } : {}) },
+      body: json ? JSON.stringify(json) : undefined,
+      signal,
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 401) { PASS = ""; store.set("echo_pass", null); cloudInfo = null; renderMode(); }
+    if (!r.ok) throw Object.assign(new Error(d.message || `HTTP ${r.status}`), { status: r.status, data: d });
+    return d;
+  }
+  async function refreshCloud() {
+    if (!passValid()) { cloudInfo = null; renderMode(); return; }
+    try {
+      cloudInfo = await cloudApi("/cloud/status");
+      if (!S) markMac(!!cloudInfo.macOnline);
+    } catch { /* keep the last answer */ }
+    renderMode();
+  }
+  setInterval(() => { if (!document.hidden) refreshCloud(); }, 20_000);
+  function cloudProblem(e) {
+    if (e.status === 401) return "Sign in once with your Mac online to use Phone mode.";
+    const d = e.data || {};
+    let msg = d.message || "Phone mode had a problem. Try again.";
+    if (d.resetsAt) msg += ` It comes back at ${clock(d.resetsAt)}.`;
+    return msg;
   }
 
   // ---------- approvals ----------
@@ -335,9 +484,12 @@
   // ---------- home actions ----------
   $("act-stop").addEventListener("click", async () => {
     if (window.speechSynthesis) speechSynthesis.cancel();
-    try { await api("/stop", { json: {} }); toast("Stopped"); } catch { toast("Couldn't reach your Mac.", true); }
+    if (cloudBusy) { cloudAbort?.abort(); setCloudBusy(false); toast("Stopped"); }
+    if (!(S && macOnline)) return;
+    try { await api("/stop", { json: {} }); if (mode === "mac") toast("Stopped"); } catch { toast("Couldn't reach your Mac.", true); }
   });
   $("act-neural").addEventListener("click", async () => {
+    if (!(S && macOnline)) return toast("That needs your Mac, and it's offline right now.", true);
     try { await api("/action", { json: { type: "open-neural" } }); toast("Neural map is open on your Mac"); } catch (e) { toast(e.message, true); }
   });
 
@@ -385,6 +537,7 @@
     }
     const wav = homeRec.stop(); homeRec = null; btn.setAttribute("aria-pressed", "false");
     if (wav.byteLength < 44 + 16000) return toast("Too short — tap, speak, then tap again.", true);
+    if (mode === "phone") return void sendCloudVoice(wav, { speak: speakHere });
     try { await api("/voice", { body: wav }); toast("Sent to Echo"); } catch { toast("Couldn't reach your Mac.", true); }
   });
 
@@ -402,20 +555,37 @@
     for (const it of d.items || []) {
       if (it.kind !== "reply" || firstEvents) continue;
       const text = String(it.line).replace(/^Echo:\s*/, "");
-      $("activity-line").textContent = text;
-      if (speakHere && window.speechSynthesis) {
-        const ut = new SpeechSynthesisUtterance(text);
-        const voices = speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang));
-        ut.voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices[0] || null;
-        speechSynthesis.speak(ut);
-      }
+      if (mode === "mac") $("activity-line").textContent = text;
+      if (speakHere) say(text);
     }
     firstEvents = false;
   }
+  function say(text) {
+    if (!window.speechSynthesis) return;
+    const ut = new SpeechSynthesisUtterance(text);
+    const voices = speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang));
+    ut.voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices[0] || null;
+    speechSynthesis.speak(ut);
+  }
 
   // ---------- chat ----------
-  let chatAfter = 0, unread = 0, chatTyping = false, lastDay = "", chatLoaded = false;
+  // One conversation from two places: Echo on the Mac (Mac mode) and Echo in
+  // the cloud (Phone mode). Both are kept on this phone, so the history shows
+  // even with the Mac off, and Phone mode's messages are copied to the Mac's
+  // chat once it's back (each with this phone's own id, so never twice).
+  let chatAfter = 0, unread = 0, chatTyping = false, lastDay = "", chatLoaded = false, lastAt = 0;
+  let cloudAbort = null, lastCloudLine = "";
   const messagesEl = $("messages");
+  const CACHE_KEY = "echo_chat_cache", CACHE_MAX = 400;
+  let chatCache = [];
+  try { chatCache = JSON.parse(store.get(CACHE_KEY) || "[]").filter((m) => m && m.k && typeof m.text === "string"); } catch { chatCache = []; }
+  let saveTimer = 0;
+  function saveCache() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { chatCache = chatCache.slice(-CACHE_MAX); store.set(CACHE_KEY, JSON.stringify(chatCache)); }, 300);
+  }
+  const byTime = () => [...chatCache].sort((x, y) => x.at - y.at);
+  const newKey = () => `c-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   function scrollMessages() { messagesEl.scrollTop = messagesEl.scrollHeight; }
   messagesEl.addEventListener("scroll", () => {
     stickToBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
@@ -423,42 +593,84 @@
   function renderBadge() { const b = $("chat-badge"); b.hidden = !unread; b.textContent = unread > 9 ? "9+" : String(unread); }
   function addMessage(m) {
     const day = new Date(m.at).toDateString();
+    const before = $("typing");
+    const put = (n) => (before ? messagesEl.insertBefore(n, before) : messagesEl.appendChild(n));
     if (day !== lastDay) {
       lastDay = day;
       const today = new Date().toDateString() === day;
-      messagesEl.appendChild(el("div", "day", today ? "Today" : new Date(m.at).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })));
+      put(el("div", "day", today ? "Today" : new Date(m.at).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })));
     }
     const mine = m.from === "you";
     const n = el("div", `msg ${mine ? "me cta" : "echo glass"}${m.kind === "voice" ? " voice" : ""}`);
     n.appendChild(document.createTextNode(m.text));
-    n.appendChild(el("time", "", clock(m.at)));
-    n.dataset.id = m.id;
-    messagesEl.appendChild(n);
+    if (!mine && m.actions && m.actions.length) {
+      const acts = el("div", "acts");
+      for (const a of m.actions) {
+        const btn = el("button", "glass act-btn", a.label);
+        btn.addEventListener("click", (e) => { e.stopPropagation(); runAction(a, btn); });
+        acts.appendChild(btn);
+      }
+      n.appendChild(acts);
+    }
+    if (!mine && m.sources && m.sources.length) {
+      const srcs = el("div", "srcs");
+      for (const src of m.sources) {
+        const link = el("a", "", src.title);
+        link.href = src.url; link.target = "_blank"; link.rel = "noopener";
+        srcs.appendChild(link);
+      }
+      n.appendChild(srcs);
+    }
+    const t = el("time", "", clock(m.at));
+    if (m.src === "phone") t.appendChild(el("span", "via", " · on your phone"));
+    n.appendChild(t);
+    n.dataset.k = m.k;
+    put(n);
+    lastAt = Math.max(lastAt, m.at);
+  }
+  function renderChat() {
+    const fromBottom = stickToBottom ? null : messagesEl.scrollHeight - messagesEl.scrollTop;
+    clear(messagesEl); lastDay = ""; lastAt = 0;
+    for (const m of byTime()) addMessage(m);
+    renderTyping(chatTyping || cloudBusy);
+    if (fromBottom == null) scrollMessages(); else messagesEl.scrollTop = messagesEl.scrollHeight - fromBottom;
+  }
+  function putMessage(m) {
+    chatCache.push(m);
+    saveCache();
+    if (m.at >= lastAt) { addMessage(m); if (stickToBottom || m.from === "you") scrollMessages(); } else renderChat();
+  }
+  function dropMessage(m) {
+    chatCache = chatCache.filter((x) => x !== m);
+    saveCache();
+    renderChat();
   }
   function renderTyping(on) {
     let t = $("typing");
     if (on && !t) { t = el("div", "typing glass"); t.id = "typing"; t.setAttribute("aria-label", "Echo is typing"); t.append(el("i"), el("i"), el("i")); messagesEl.appendChild(t); }
     if (!on && t) t.remove();
-    if (on && t) messagesEl.appendChild(t); // keep it last
-    $("presence").textContent = on ? "typing…" : offline ? "offline" : "online";
+    if (on && t && t !== messagesEl.lastChild) messagesEl.appendChild(t); // keep it last
+    $("presence").textContent = on ? "typing…" : mode === "phone" ? "on your phone" : macOnline ? "online" : "offline";
   }
   async function pollChat() {
     if (!S) return;
     const d = await api(`/chat?since=${chatAfter}`);
-    const atBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
-    let added = 0;
+    let changed = false;
     for (const m of d.messages || []) {
-      if (m.id <= chatAfter) continue;
-      chatAfter = m.id;
-      if (messagesEl.querySelector(`[data-id="${m.id}"]`)) continue;
-      addMessage(m); added++;
+      chatAfter = Math.max(chatAfter, m.id);
+      const copy = m.ref && chatCache.find((x) => x.k === m.ref);
+      if (copy) { if (!copy.synced) { copy.synced = true; changed = true; } continue; } // our own Phone mode message, back from the Mac
+      const k = `m${m.id}-${m.at}`;
+      if (chatCache.some((x) => x.k === k)) continue;
+      putMessage({ k, at: m.at, from: m.from, text: m.text, kind: m.kind, src: m.via === "phone" ? "phone" : "mac" });
       if (chatLoaded && m.from === "echo" && currentView !== "chat") unread++; // history is not "unread"
     }
+    if (changed) saveCache();
     chatLoaded = true;
     chatTyping = !!d.typing;
-    renderTyping(chatTyping);
+    renderTyping(chatTyping || cloudBusy);
     renderBadge();
-    if (added && (atBottom || currentView !== "chat")) scrollMessages();
+    syncToMac();
   }
   const input = $("chat-input");
   function autosize() { input.style.height = "40px"; input.style.height = `${Math.min(120, input.scrollHeight)}px`; }
@@ -469,23 +681,147 @@
   }
   input.addEventListener("input", () => { autosize(); setComposerMode(); });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+  function restoreInput(text) { input.value = text; autosize(); setComposerMode(); }
   async function sendChat(text = input.value) {
     text = String(text).trim();
     if (!text) return;
-    input.value = ""; autosize(); setComposerMode();
+    restoreInput("");
+    if (mode === "phone") return sendCloud(text);
     try {
       const d = await api("/chat", { json: { text } });
-      if (d.message && !messagesEl.querySelector(`[data-id="${d.message.id}"]`)) { addMessage(d.message); chatAfter = Math.max(chatAfter, d.message.id); }
+      if (d.message) {
+        chatAfter = Math.max(chatAfter, d.message.id);
+        const k = `m${d.message.id}-${d.message.at}`;
+        if (!chatCache.some((x) => x.k === k)) putMessage({ k, at: d.message.at, from: "you", text: d.message.text, kind: d.message.kind, src: "mac" });
+      }
       renderTyping(true); scrollMessages();
     } catch (e) {
-      toast(e.status === 503 ? "Your Mac is offline — message not sent." : "Couldn't send that.", true);
-      input.value = text; autosize(); setComposerMode();
+      restoreInput(text);
+      if (e.status === 503 && passValid()) { renderBanners(true); toast("Your Mac is offline. Switch to Phone to ask Echo here.", true); }
+      else toast(e.status === 503 ? "Your Mac is offline — message not sent." : "Couldn't send that.", true);
     }
   }
   $("composer").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim()) sendChat(); });
   document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => sendChat(c.textContent)));
   // Tapping the conversation puts the keyboard away.
   messagesEl.addEventListener("click", () => input.blur());
+
+  // ---------- Phone mode: asking Echo in the cloud ----------
+  const shortcutList = () => String(store.get("echo_shortcuts") || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20);
+  function historyNow() { return byTime().slice(-20).map((m) => ({ role: m.from === "you" ? "user" : "echo", text: m.text })); }
+  function cloudContext() {
+    const pl = place();
+    let tz = "UTC";
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { /* default */ }
+    return { tz, city: pl && pl.name !== "Current location" ? pl.name : undefined, lat: pl ? pl.lat : undefined, lon: pl ? pl.lon : undefined, shortcuts: shortcutList() };
+  }
+  function setCloudBusy(on) {
+    cloudBusy = on;
+    renderTyping(chatTyping || on);
+    if (mode === "phone") paintPhoneHome();
+  }
+  async function askCloud(path, payload, { speak = false } = {}) {
+    if (!passValid()) { toast("Sign in once with your Mac online to use Phone mode.", true); return null; }
+    cloudAbort?.abort();
+    const abort = (cloudAbort = new AbortController());
+    setCloudBusy(true);
+    try {
+      const d = await cloudApi(path, { ...payload, context: cloudContext() }, { signal: abort.signal });
+      const reply = { k: newKey(), at: Date.now(), from: "echo", text: d.reply, kind: "text", src: "phone", actions: d.actions || [], sources: d.sources || [] };
+      putMessage(reply);
+      prepareActions(reply);
+      lastCloudLine = d.reply;
+      if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
+      if (speak) say(d.reply);
+      if (currentView !== "chat") { unread++; renderBadge(); }
+      renderMode();
+      syncToMac();
+      return d;
+    } catch (e) {
+      if (e.name !== "AbortError") toast(cloudProblem(e), true);
+      return null;
+    } finally {
+      if (cloudAbort === abort) setCloudBusy(false);
+    }
+  }
+  async function sendCloud(text) {
+    const history = historyNow();
+    const mine = { k: newKey(), at: Date.now(), from: "you", text, kind: "text", src: "phone" };
+    putMessage(mine);
+    const d = await askCloud("/cloud/chat", { text, history });
+    if (!d) { dropMessage(mine); restoreInput(text); }
+  }
+  function toBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let out = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(out);
+  }
+  async function sendCloudVoice(wav, opts = {}) {
+    if (wav.byteLength > 2_200_000) return toast("That's too long. Keep voice messages under a minute.", true);
+    const history = historyNow();
+    const mine = { k: newKey(), at: Date.now(), from: "you", text: "Voice message", kind: "voice", src: "phone" };
+    putMessage(mine);
+    const d = await askCloud("/cloud/voice", { audio: toBase64(wav), history }, opts);
+    if (!d) return dropMessage(mine);
+    if (d.transcript) { mine.text = d.transcript; saveCache(); renderChat(); }
+  }
+  // Buttons under Phone mode's answers. Nothing happens until one is tapped.
+  async function makeIcs(a) {
+    const d = await cloudApi("/cloud/ics", { event: a.data });
+    a.url = d.url; a.urlUntil = Date.now() + 9 * 60_000;
+    saveCache();
+    return d.url;
+  }
+  function prepareActions(m) {
+    // Calendar files are made ahead, so a tap can open Safari straight away.
+    for (const a of m.actions || []) if (a.type === "calendar") makeIcs(a).catch(() => {});
+  }
+  async function runAction(a, btn) {
+    if (a.type === "link") return void window.open(a.data.url, "_blank", "noopener");
+    if (a.type === "shortcut") {
+      const q = `name=${encodeURIComponent(a.data.name)}${a.data.input ? `&input=text&text=${encodeURIComponent(a.data.input)}` : ""}`;
+      location.href = `shortcuts://run-shortcut?${q}`;
+      return;
+    }
+    if (a.type === "calendar") {
+      if (a.url && a.urlUntil > Date.now()) return void window.open(a.url, "_blank");
+      const w = window.open("about:blank", "_blank"); // opened inside the tap, filled once the file is ready
+      try { const url = await makeIcs(a); if (w) w.location.href = url; else window.open(url, "_blank"); }
+      catch (e) { if (w) w.close(); toast(cloudProblem(e), true); }
+      return;
+    }
+    if (a.type === "mac") {
+      if (!(S && macOnline)) return toast("Your Mac is offline. Try again when it's on.", true);
+      btn.setAttribute("aria-busy", "true");
+      try { await api("/chat", { json: { text: a.data.task } }); toast("Sent to your Mac"); pollChat().catch(() => {}); }
+      catch { toast("Couldn't reach your Mac.", true); }
+      finally { btn.removeAttribute("aria-busy"); }
+    }
+  }
+  // Copy Phone mode's messages into the Mac's chat once it's reachable.
+  let syncing = false;
+  async function syncToMac() {
+    if (syncing || !S || !macOnline) return;
+    const todo = byTime().filter((m) => m.src === "phone" && !m.synced && !(m.kind === "voice" && m.text === "Voice message"));
+    if (!todo.length) return;
+    syncing = true;
+    try {
+      while (todo.length) {
+        const batch = [];
+        let size = 0;
+        while (todo.length && size < 150_000 && batch.length < 100) {
+          const m = todo.shift();
+          const item = { ref: m.k, from: m.from, text: m.text, at: m.at, kind: m.kind === "voice" ? "voice" : "text" };
+          size += JSON.stringify(item).length;
+          batch.push(item);
+        }
+        await api("/chat/import", { json: { messages: batch }, quiet: true });
+        for (const it of batch) { const m = chatCache.find((x) => x.k === it.ref); if (m) m.synced = true; }
+        saveCache();
+      }
+    } catch { /* tried again on the next poll */ } finally { syncing = false; }
+  }
 
   // Voice notes: hold the mic (or tap the header button) to record.
   let note = null, noteTimer = 0;
@@ -503,10 +839,16 @@
     if (!send) { rec.cancel(); return; }
     const wav = rec.stop();
     if (wav.byteLength < 44 + 12000) return toast("Hold a little longer to record.", true);
+    if (mode === "phone") return void sendCloudVoice(wav);
     renderTyping(true); scrollMessages();
     try {
       const d = await api("/chat/voice", { body: wav });
-      if (d.message) { addMessage(d.message); chatAfter = Math.max(chatAfter, d.message.id); renderTyping(true); scrollMessages(); }
+      if (d.message) {
+        chatAfter = Math.max(chatAfter, d.message.id);
+        const k = `m${d.message.id}-${d.message.at}`;
+        if (!chatCache.some((x) => x.k === k)) putMessage({ k, at: d.message.at, from: "you", text: d.message.text, kind: d.message.kind, src: "mac" });
+        renderTyping(true); scrollMessages();
+      }
     } catch (e) { renderTyping(false); toast(e.data && e.data.error || "Couldn't send the voice note.", true); }
   }
   const sendBtn = $("send-btn");
@@ -736,7 +1078,35 @@
     try { const r = await api("/action", { json: { type: "set-voice", key: s.dataset.voice, value } }); if (!r.ok) throw new Error(r.message); }
     catch (e) { s.setAttribute("aria-checked", String(!value)); toast(e.message || "Couldn't change that.", true); }
   }));
-  $("sign-out").addEventListener("click", () => signedOut());
+  $("sign-out").addEventListener("click", () => signedOut("", { full: true }));
+  // Every phone, including this one: the Mac cancels its sessions and every cloud
+  // pass; with the Mac off, the relay cancels the passes and tells the Mac later.
+  let signoutArmed = 0;
+  $("signout-all").addEventListener("click", async () => {
+    const row = $("signout-all").querySelector(".grow");
+    if (Date.now() - signoutArmed > 4000) { signoutArmed = Date.now(); row.textContent = "Tap again to sign out every phone"; setTimeout(() => (row.textContent = "Sign out every phone"), 4000); return; }
+    signoutArmed = 0; row.textContent = "Sign out every phone";
+    try {
+      if (S && macOnline) await api("/signout-all", { json: {}, quiet: true });
+      else await cloudApi("/cloud/signout-all", {});
+    } catch { /* signed out below regardless */ }
+    signedOut("Every phone was signed out.", { full: true });
+  });
+  // Phone mode settings.
+  const swAuto = $("sw-auto");
+  swAuto.setAttribute("aria-checked", String(store.get("echo_autoswitch") === "on"));
+  swAuto.addEventListener("click", () => {
+    const on = swAuto.getAttribute("aria-checked") !== "true";
+    store.set("echo_autoswitch", on ? "on" : null);
+    swAuto.setAttribute("aria-checked", String(on));
+    renderBanners();
+  });
+  const shortcutsIn = $("set-shortcuts");
+  shortcutsIn.value = store.get("echo_shortcuts") || "";
+  const saveShortcuts = () => store.set("echo_shortcuts", shortcutsIn.value.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20).join(", ") || null);
+  shortcutsIn.addEventListener("change", saveShortcuts);
+  shortcutsIn.addEventListener("blur", saveShortcuts);
+  shortcutsIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); shortcutsIn.blur(); } });
   $("power-btn").addEventListener("click", () => openSheet("sheet-power"));
   $("po-confirm").addEventListener("click", async () => {
     try {
@@ -863,5 +1233,9 @@
   // ---------- go ----------
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   setComposerMode();
-  if (T && S) { start(); show(TABS.includes(lastTab) ? lastTab : "home"); } else prepareSignIn();
+  renderChat();
+  if (T && S) { start(); enter(); }
+  else if (mode === "phone" && passValid()) enter();
+  else prepareSignIn();
+  refreshCloud();
 })();

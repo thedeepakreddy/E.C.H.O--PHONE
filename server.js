@@ -15,6 +15,16 @@
  *   RELAY_SECRET   shared with Echo (keys.env: ECHO_RELAY_SECRET). Required.
  *   PORT           set by Render.
  *
+ * Phone mode (Echo in the cloud, working with the Mac off) adds, all optional:
+ *   GEMINI_API_KEY             the cloud brain (free tier is fine); GEMINI_MODEL to change it
+ *   UPSTASH_REDIS_REST_URL     durable, encrypted storage
+ *   UPSTASH_REDIS_REST_TOKEN
+ *   QSTASH_TOKEN               the 5-minute tick (QSTASH_URL if the console shows one)
+ *
+ * Phone mode is reached with a cloud pass that Echo on the Mac signs at sign-in
+ * (lib/secure.js), so the relay can trust it while the Mac is off. It can never
+ * reach the Mac: everything that touches the Mac still goes through the Mac.
+ *
  * Node's standard library only, no dependencies.
  */
 import http from "node:http";
@@ -22,6 +32,12 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deriveKeys, verifyPass } from "./lib/secure.js";
+import { createStore } from "./lib/store.js";
+import { createGemini } from "./lib/gemini.js";
+import { createCloud, CloudError } from "./lib/cloud.js";
+import { buildIcs, validEvent } from "./lib/calendar.js";
+import { ensureSchedule } from "./lib/tick.js";
 
 export const POLL_MS = 25_000;          // how long Echo's "anything for me?" is held open
 export const REQUEST_MS = 30_000;       // how long a phone request may wait for Echo's answer
@@ -50,8 +66,13 @@ const SECURITY = {
 const FORWARDED = new Set([
   "/login", "/status", "/events", "/pending", "/confirm", "/command", "/voice", "/mouse", "/keys",
   "/action", "/stop", "/frame", "/signout-all", "/close", "/log", "/rtc/offer", "/rtc/answer", "/rtc/ice",
-  "/chat", "/chat/voice", "/passkey/options", "/passkey/register", "/passkey/login",
+  "/chat", "/chat/voice", "/chat/import", "/passkey/options", "/passkey/register", "/passkey/login",
 ]);
+/** Phone mode: requests per device per minute, and how big a request may be. */
+export const CLOUD_RATE = 30;
+export const CLOUD_BODY = 256 * 1024;
+export const CLOUD_VOICE_BODY = 4 * 1024 * 1024;
+export const ICS_TTL_MS = 10 * 60_000;
 
 /**
  * World intelligence for the World page, from Osiris (osirisai.live): conflict
@@ -95,9 +116,29 @@ export function summariseWorld({ conflicts, earthquakes, fires, weather }, now =
   };
 }
 
-export function createRelay({ secret, now = () => Date.now(), fetchJson = defaultFetchJson, pollMs = POLL_MS, requestMs = REQUEST_MS } = {}) {
+export function createRelay({
+  secret, now = () => Date.now(), fetchJson = defaultFetchJson, pollMs = POLL_MS, requestMs = REQUEST_MS,
+  gemini = null, store = null, limits = {},
+} = {}) {
   if (!secret || secret.length < 32) throw new Error("RELAY_SECRET must be set (at least 32 characters).");
   const secretBuf = Buffer.from(secret);
+  const keys = deriveKeys(secret);
+  const cronBuf = Buffer.from(keys.cron);
+  store ??= createStore({ key: keys.store, now });
+  /**
+   * Cloud passes older than this generation are cancelled ("Sign out every
+   * phone"). Echo reports its generation on every poll and the relay keeps the
+   * highest it has seen, so a sign-out from either side reaches both.
+   */
+  let passGen = 0;
+  const passGenLoaded = store.count("passgen").then((n) => { passGen = Math.max(passGen, n); }).catch(() => {});
+  async function raisePassGen(n) {
+    if (!(Number.isInteger(n) && n > passGen)) return;
+    passGen = n;
+    await store.setCount("passgen", n).catch(() => {});
+  }
+  const cloudHits = new Map();
+  const icsCache = new Map();
   /** Phone requests waiting for Echo to collect them. */
   const queue = [];
   /** Echo's polls waiting for a phone request. */
@@ -147,6 +188,16 @@ export function createRelay({ secret, now = () => Date.now(), fetchJson = defaul
     if (weatherCache.size > 500) weatherCache.delete(weatherCache.keys().next().value);
     return value;
   }
+  const cloud = gemini ? createCloud({
+    gemini, store, now, limits,
+    tools: {
+      weather: getWeather,
+      world: async () => { const { raw, ...w } = await getWorld(); return w; },
+      geocode: async (q) => ((await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=${encodeURIComponent(q)}`))?.results ?? [])
+        .map((r) => ({ name: r.name, country: r.country ?? "", lat: r.latitude, lon: r.longitude })),
+    },
+  }) : null;
+
   let lastPoll = 0;
 
   const online = () => now() - lastPoll < ONLINE_MS;
@@ -188,7 +239,7 @@ export function createRelay({ secret, now = () => Date.now(), fetchJson = defaul
       const waiter = waiters.shift();
       clearTimeout(waiter.timer);
       inFlight.set(job.id, job);
-      waiter.res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      waiter.res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", "x-relay-pass-gen": String(passGen) });
       waiter.res.end(JSON.stringify(job.wire));
     }
   }
@@ -246,10 +297,12 @@ export function createRelay({ secret, now = () => Date.now(), fetchJson = defaul
 
   async function agentPoll(req, res) {
     lastPoll = now();
+    await passGenLoaded;
+    await raisePassGen(Number(req.headers["x-echo-pass-gen"]));
     const waiter = { res, timer: setTimeout(() => {
       const i = waiters.indexOf(waiter);
       if (i >= 0) waiters.splice(i, 1);
-      res.writeHead(204, { "cache-control": "no-store" });
+      res.writeHead(204, { "cache-control": "no-store", "x-relay-pass-gen": String(passGen) });
       res.end();
     }, pollMs) };
     res.on("close", () => {
@@ -282,6 +335,81 @@ export function createRelay({ secret, now = () => Date.now(), fetchJson = defaul
     send(res, 204, "");
   }
 
+  // ---- Phone mode ----------------------------------------------------------
+
+  /** The cloud pass on this request, if it is genuine and current. */
+  async function cloudClaims(req) {
+    await passGenLoaded;
+    return verifyPass(keys.pass, req.headers["x-echo-pass"], { minGen: passGen, now: now() });
+  }
+  function rateLimited(device) {
+    const t = now();
+    const hits = (cloudHits.get(device) ?? []).filter((x) => t - x < 60_000);
+    hits.push(t);
+    cloudHits.set(device, hits);
+    if (cloudHits.size > 500) for (const [k, v] of cloudHits) if (!v.some((x) => t - x < 60_000)) cloudHits.delete(k);
+    return hits.length > CLOUD_RATE;
+  }
+  async function readJson(req, limit) {
+    return JSON.parse((await readBody(req, limit)).toString("utf8") || "{}");
+  }
+  const CLOUD_STATUS = { setup: 503, cap: 429, quota: 429, minute: 429, busy: 429, input: 400, failed: 502 };
+  function sendCloudError(res, e) {
+    if (e instanceof CloudError) return send(res, CLOUD_STATUS[e.kind] ?? 502, { error: e.kind, message: e.message, resetsAt: e.resetsAt ?? null });
+    if (e?.status === 413) return send(res, 413, { error: "input", message: "That's too long to send." });
+    if (e instanceof SyntaxError) return send(res, 400, { error: "input", message: "Bad request." });
+    return send(res, 502, { error: "failed", message: "Phone mode had a problem. Try again." });
+  }
+
+  async function cloudRoute(req, res, path) {
+    const claims = await cloudClaims(req);
+    if (!claims) return send(res, 401, { error: "pass", message: "Sign in once with your Mac online to use Phone mode." });
+    if (path === "/cloud/status" && req.method === "GET") {
+      return send(res, 200, {
+        ready: Boolean(cloud), model: gemini?.model ?? null, store: store.remote ? "upstash" : "memory",
+        macOnline: online(), usage: cloud ? await cloud.usage().catch(() => null) : null, passExpires: claims.exp,
+      });
+    }
+    if (req.method !== "POST") return send(res, 404, "Not found");
+    if (path === "/cloud/signout-all") {
+      await raisePassGen(passGen + 1);
+      return send(res, 200, { ok: true });
+    }
+    if (path === "/cloud/ics") {
+      try {
+        const { event } = await readJson(req, 16 * 1024);
+        if (!validEvent(event)) return send(res, 400, { error: "input", message: "That event is missing a title or time." });
+        const id = randomUUID();
+        icsCache.set(id, { ics: buildIcs(event, { uid: id, now: now() }), exp: now() + ICS_TTL_MS });
+        for (const [k, v] of icsCache) if (v.exp <= now()) icsCache.delete(k);
+        return send(res, 200, { url: `/ics/${id}.ics` });
+      } catch (e) { return sendCloudError(res, e); }
+    }
+    if (path === "/cloud/chat" || path === "/cloud/voice") {
+      if (!cloud) return send(res, 503, { error: "setup", message: "Phone mode isn't set up yet: add GEMINI_API_KEY on Render." });
+      if (rateLimited(claims.device)) return send(res, 429, { error: "busy", message: "Slow down a little — too many messages this minute." });
+      try {
+        const body = await readJson(req, path === "/cloud/voice" ? CLOUD_VOICE_BODY : CLOUD_BODY);
+        const context = { ...(body.context && typeof body.context === "object" ? body.context : {}), macOnline: online() };
+        if (path === "/cloud/voice") {
+          const audio = String(body.audio ?? "");
+          if (!/^[A-Za-z0-9+/=]{100,}$/.test(audio)) return send(res, 400, { error: "input", message: "That recording didn't come through." });
+          return send(res, 200, await cloud.chat({ history: body.history, audio, context }));
+        }
+        return send(res, 200, await cloud.chat({ history: body.history, text: body.text, context }));
+      } catch (e) { return sendCloudError(res, e); }
+    }
+    return send(res, 404, "Not found");
+  }
+
+  async function cronTick(req, res) {
+    const given = Buffer.from(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
+    if (given.length !== cronBuf.length || !timingSafeEqual(given, cronBuf)) return send(res, 404, "Not found");
+    // Timed work (the briefing, reminders) joins here in later updates.
+    await store.setCount("tick:last", now()).catch(() => {});
+    return send(res, 200, { ok: true, at: now() });
+  }
+
   async function serveStatic(res, path) {
     const name = path === "/" ? "index.html" : path.slice(1);
     const file = normalize(join(PUBLIC, name));
@@ -300,7 +428,15 @@ export function createRelay({ secret, now = () => Date.now(), fetchJson = defaul
   const handler = (req, res) => {
     const url = new URL(req.url ?? "/", "http://relay");
     const path = url.pathname;
-    if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline" });
+    if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory" } });
+    if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
+    if (path === "/cron/tick" && req.method === "POST") return void cronTick(req, res);
+    const ics = /^\/ics\/([0-9a-f-]{36})\.ics$/.exec(path);
+    if (ics && req.method === "GET") {
+      const hit = icsCache.get(ics[1]);
+      if (!hit || hit.exp <= now()) return send(res, 404, "This calendar link has expired. Tap the button in Echo again.");
+      return send(res, 200, hit.ics, { "content-type": "text/calendar; charset=utf-8", "content-disposition": 'inline; filename="echo-event.ics"' });
+    }
     if (path === "/world" && req.method === "GET") {
       return void getWorld().then(({ raw, ...w }) => send(res, 200, w, { "cache-control": "no-store" }))
         .catch((e) => send(res, 502, { error: String(e.message ?? e) }));
@@ -327,7 +463,7 @@ export function createRelay({ secret, now = () => Date.now(), fetchJson = defaul
     if (req.method === "GET") return serveStatic(res, path);
     send(res, 404, "Not found");
   };
-  return { handler, state: () => ({ online: online(), queued: queue.length, waiting: waiters.length, inFlight: inFlight.size }) };
+  return { handler, keys, state: () => ({ online: online(), queued: queue.length, waiting: waiters.length, inFlight: inFlight.size, passGen }) };
 }
 
 async function defaultFetchJson(url) {
@@ -342,7 +478,21 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const paired = secret.length >= 32;
   // Not paired yet (RELAY_SECRET missing or short): the app, World and weather
   // still work, but no Mac can connect — with a key nobody holds — until it is set.
-  const relay = createRelay({ secret: paired ? secret : randomBytes(32).toString("hex") });
+  const env = process.env;
+  const relaySecret = paired ? secret : randomBytes(32).toString("hex");
+  const keys = deriveKeys(relaySecret);
+  const store = createStore({ url: env.UPSTASH_REDIS_REST_URL, token: env.UPSTASH_REDIS_REST_TOKEN, key: keys.store });
+  const gemini = paired && env.GEMINI_API_KEY ? createGemini({ apiKey: env.GEMINI_API_KEY.trim(), model: (env.GEMINI_MODEL || "gemini-3.1-flash-lite").trim(), base: env.GEMINI_BASE || undefined }) : null;
+  const relay = createRelay({
+    secret: relaySecret, store, gemini,
+    limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200 },
+  });
+  console.log(`Phone mode: brain ${gemini ? gemini.model : "off (no GEMINI_API_KEY)"}, store ${store.remote ? "Upstash" : "memory only (no UPSTASH_REDIS_REST_URL/TOKEN)"}`);
+  if (paired && env.QSTASH_TOKEN) {
+    ensureSchedule({ qstashToken: env.QSTASH_TOKEN.trim(), qstashUrl: env.QSTASH_URL?.trim() || undefined, publicUrl: env.RENDER_EXTERNAL_URL, cronToken: keys.cron })
+      .then((r) => console.log(r.ok ? "Tick: every 5 minutes via QStash" : `Tick: not scheduled (${r.reason})`))
+      .catch((e) => console.error(`Tick: not scheduled (${e?.message ?? e})`));
+  }
   const handler = paired ? relay.handler : (req, res) => {
     const path = (req.url ?? "").split("?")[0];
     if (path === "/healthz" || path.startsWith("/agent/")) {

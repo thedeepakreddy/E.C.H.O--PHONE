@@ -63,6 +63,26 @@ The link carries a private token. Treat it like a key, and don't post it anywher
 
 Replies to anything sent from the phone come back to the phone only. Echo doesn't say them out loud on the Mac.
 
+## Phone mode
+
+Tap the pill at the top right of the Echo page to choose where Echo runs:
+- **Mac:** Echo on your Mac, as above.
+- **Phone:** Echo in the cloud, on this relay with Gemini. It answers, searches the web, checks weather and world events, and offers buttons you tap: add to calendar, remind me, run a Shortcut, open a link, or send a job to the Mac. It keeps working while the Mac is off. It can't reach the Mac itself.
+
+**How it's protected.** The Mac signs a cloud pass for the phone when you sign in. The pass is valid for 30 days and renews while the Mac is reachable. *Sign out every phone* cancels every pass, from either the Mac or the phone. Everything the relay stores is encrypted with a key derived from `RELAY_SECRET`.
+
+**Messages sync.** Phone mode's messages are copied into the Mac's chat when it's back, never twice.
+
+To set it up, add these to the service's **Environment** on Render:
+
+| Variable | What it's for |
+| --- | --- |
+| `GEMINI_API_KEY` | The cloud brain. Use a key from its own Google AI Studio project; the free tier is fine. Set `GEMINI_MODEL` to change the model. |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Durable, encrypted storage on Upstash's free plan. Without them, the relay forgets everything when Render restarts. |
+| `QSTASH_TOKEN` | A wake-up every 5 minutes from Upstash QStash, so the relay stays awake and timed features can run. Also set `QSTASH_URL` if the Upstash console shows one. |
+
+`/healthz` shows whether Phone mode's brain and storage are set up.
+
 ## Notes
 
 - **Free plan.** Render's free services sleep after 15 minutes without traffic. While Echo runs, its polling keeps the relay awake. If the Mac has been off, the first open takes about a minute while Render wakes up. One always-on service uses about 744 of the 750 free hours a month.
