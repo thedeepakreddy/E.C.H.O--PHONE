@@ -187,6 +187,7 @@ body.kb .tabbar { transform: translateY(calc(100% + 40px)); opacity: 0; pointer-
 .signin-title h1 { font-size: 32px; }
 .sheet-card { border-radius: 34px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
 .notice h2 { margin-bottom: 6px; }
+.notice .field { margin-top: 14px; }
 .or { display: flex; align-items: center; gap: 10px; color: var(--sub); font-size: 12px; }
 .or span { flex: 1; height: 1px; background: rgba(255, 255, 255, .15); }
 .or em { font-style: normal; }

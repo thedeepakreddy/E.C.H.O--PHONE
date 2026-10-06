@@ -165,6 +165,17 @@
     } catch { $("signin-err").textContent = "No connection."; }
   });
   $("pw").addEventListener("input", () => ($("signin-err").textContent = ""));
+  // A Home Screen app opened without its link (added from the bare address, or
+  // its storage cleared): take the link pasted from Telegram instead.
+  $("link-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const raw = $("link-in").value.trim();
+    const m = raw.match(/[?&]t=([0-9a-f]{32})\b/i) || raw.match(/^([0-9a-f]{32})$/i);
+    if (!m) { $("link-err").textContent = "That doesn't look like your Echo link. Send /link to Echo on Telegram and copy the whole link."; return; }
+    T = m[1].toLowerCase(); store.set("echo_t", T);
+    $("link-in").value = ""; $("link-err").textContent = "";
+    prepareSignIn();
+  });
   $("faceid-login").addEventListener("click", async () => {
     try {
       const o = await fetch(u("/passkey/options?purpose=login")).then((r) => r.json());

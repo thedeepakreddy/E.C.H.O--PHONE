@@ -47,7 +47,13 @@
   </form>
   <div id="no-link" class="glass sheet-card notice" hidden>
     <h2>Open your Echo link once</h2>
-    <p class="sub">This app needs the private link from your Mac. Send <b>/link</b> to Echo on Telegram, open it here, then add it to your Home Screen from Safari's share menu.</p>
+    <p class="sub">This app needs the private link from your Mac. Send <b>/link</b> to Echo on Telegram, then paste it here.</p>
+    <form id="link-form" class="glass field" autocomplete="off">
+      <label for="link-in" class="sr">Your Echo link</label>
+      <input id="link-in" type="url" inputmode="url" placeholder="Paste your Echo link" enterkeyhint="go" autocapitalize="off" spellcheck="false">
+      <button type="submit" class="bubble b40" aria-label="Use this link"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    </form>
+    <p id="link-err" class="err" role="alert"></p>
   </div>
 </section>
 
