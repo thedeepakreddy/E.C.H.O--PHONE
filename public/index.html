@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- No zoom of any kind: the layout is fixed to the screen like a native app. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#02070a">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Echo">
+<meta name="format-detection" content="telephone=no">
+<title>Echo</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body data-view="signin">
+<div aria-hidden="true" class="ambient">
+  <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
+</div>
+
+<!-- ============ SIGN IN ============ -->
+<section id="v-signin" class="view signin" aria-label="Sign in">
+  <div class="signin-hero">
+    <span class="reactor-glow" aria-hidden="true"></span>
+    <img class="reactor drift" src="/img/reactor.png" alt="" aria-hidden="true">
+  </div>
+  <div class="signin-title">
+    <h1>Welcome back</h1>
+    <p class="sub" id="signin-sub">Echo on your Mac</p>
+  </div>
+  <form id="signin-form" class="glass sheet-card" autocomplete="on">
+    <button type="button" id="faceid-login" class="cta big-btn" hidden>
+      <svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9v1.5M15 9v1.5M12 9v4l-1 1M9.5 16.5c1.4 1 3.6 1 5 0"/></svg>
+      Unlock with Face ID
+    </button>
+    <div class="or" id="signin-or" hidden><span></span><em>or use your password</em><span></span></div>
+    <label for="pw" class="sr">Password</label>
+    <div class="glass field">
+      <input id="pw" type="password" autocomplete="current-password" placeholder="Password" enterkeyhint="go">
+      <button type="submit" class="bubble b40" aria-label="Unlock"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    </div>
+    <p id="signin-err" class="err" role="alert"></p>
+  </form>
+  <div id="no-link" class="glass sheet-card notice" hidden>
+    <h2>Open your Echo link once</h2>
+    <p class="sub">This app needs the private link from your Mac. Send <b>/link</b> to Echo on Telegram, open it here, then add it to your Home Screen from Safari's share menu.</p>
+  </div>
+</section>
+
+<!-- ============ HOME ============ -->
+<section id="v-home" class="view home" aria-label="Echo" hidden>
+  <img class="hero" src="/img/humanoid.jpg" alt="Echo's particle core" decoding="async">
+  <div class="hero-fade" aria-hidden="true"></div>
+  <header class="top">
+    <div><p class="sub small" id="greeting">Hello</p><h1>Echo</h1></div>
+    <div class="glass pill" id="mac-pill"><span class="dot" id="mac-dot"></span><span id="mac-name">Your Mac</span></div>
+  </header>
+  <div class="home-stack">
+    <div class="glass pill state-pill"><span class="dot pulse" id="state-dot"></span><b id="state-label">CONNECTING</b><span class="sub" id="brain-name"></span></div>
+    <div class="actions">
+      <button class="act" id="act-listen" aria-pressed="false"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></span>Listen</button>
+      <button class="act" id="act-stop"><span class="bubble b58"><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg></span>Stop</button>
+      <button class="act" data-open="screen"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>Screen</button>
+      <button class="act" data-open="brain"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3V17a3 3 0 0 0 6 0V4zM12 4a4 4 0 0 1 4 4 3.5 3.5 0 0 1 2 6.3V17a3 3 0 0 1-6 0"/></svg></span>Brain</button>
+      <button class="act" id="act-neural"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7h8M7 8l4 8M17 9l-4 7"/></svg></span>Neural</button>
+    </div>
+    <div class="cards2">
+      <button class="glass card weather" id="weather-card" aria-label="Weather">
+        <span class="sub small row-i"><svg class="i11 fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg><span id="w-place">Weather</span></span>
+        <span class="w-now"><span id="w-temp">—</span><span id="w-icon" class="w-icon" aria-hidden="true"></span></span>
+        <span class="sub tiny" id="w-detail">Tap to set your location</span>
+      </button>
+      <button class="glass card alert-card" id="approval-card" hidden>
+        <span class="row-i"><span class="warn-badge" aria-hidden="true"><svg class="i15" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 10v4"/></svg></span><b>Needs you</b></span>
+        <span><span class="small clamp1" id="approval-mini">—</span><span class="sub tiny">Tap to review</span></span>
+      </button>
+      <div class="glass card stats-card" id="stats-card">
+        <div><b id="s-cmd">0</b><span class="sub tiny">Commands</span></div>
+        <div><b id="s-tools">0</b><span class="sub tiny">Tool calls</span></div>
+        <div><b id="s-done">0</b><span class="sub tiny">Done</span></div>
+        <div><b id="s-err">0</b><span class="sub tiny">Errors</span></div>
+      </div>
+    </div>
+    <div class="glass strip" id="activity-strip"><span class="dot pulse cyan"></span><span class="clamp1" id="activity-line">Waiting for Echo…</span></div>
+  </div>
+</section>
+
+<!-- ============ CHAT ============ -->
+<section id="v-chat" class="view chat" aria-label="Chat" hidden>
+  <header class="glass chat-head">
+    <img class="avatar" src="/icons/icon-192.png" alt="">
+    <div><b>Echo</b><span class="presence" id="presence">online</span></div>
+    <button class="bubble b44" id="chat-talk" aria-label="Talk to Echo"><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></button>
+  </header>
+  <main class="messages" id="messages" aria-live="polite" aria-label="Conversation"></main>
+  <div class="chips" id="chips">
+    <button class="glass chip">Status of my tasks</button>
+    <button class="glass chip">What's on my screen?</button>
+    <button class="glass chip">Read my latest email</button>
+    <button class="glass chip">Good night</button>
+  </div>
+  <form class="glass composer" id="composer">
+    <label for="chat-input" class="sr">Message Echo</label>
+    <textarea id="chat-input" rows="1" placeholder="Message" enterkeyhint="send" autocomplete="off"></textarea>
+    <button type="submit" class="cta b40 round" id="send-btn" aria-label="Hold to record a voice note">
+      <svg class="i18" id="ico-mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <svg class="i18" id="ico-send" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+    </button>
+  </form>
+  <div class="recording glass" id="recording" hidden><span class="dot red pulse"></span><span id="rec-time">0:00</span><span class="sub">Release to send · slide away to cancel</span></div>
+</section>
+
+<!-- ============ MISSIONS ============ -->
+<section id="v-missions" class="view list-view" aria-label="Missions" hidden>
+  <header class="top"><h1>Missions</h1></header>
+  <div class="glass seg" role="tablist" aria-label="Missions view">
+    <button role="tab" data-seg="missions" aria-selected="true">Missions</button>
+    <button role="tab" data-seg="agents" aria-selected="false">Agents</button>
+    <button role="tab" data-seg="projects" aria-selected="false">Projects</button>
+  </div>
+  <div class="scroll" id="missions-scroll">
+    <div id="seg-missions"></div>
+    <div id="seg-agents" hidden></div>
+    <div id="seg-projects" hidden></div>
+  </div>
+</section>
+
+<!-- ============ WORLD ============ -->
+<section id="v-world" class="view list-view world" aria-label="World" hidden>
+  <img class="world-bg" src="/img/osiris.jpg" alt="" aria-hidden="true">
+  <header class="top"><div><h1>World</h1><p class="sub small" id="world-updated">Live from Osiris</p></div>
+    <a class="glass pill" href="https://osirisai.live" target="_blank" rel="noopener">Open in Osiris ↗</a></header>
+  <div class="scroll" id="world-scroll">
+    <div class="glass globe"><img src="/img/osiris.jpg" alt="The Osiris globe"><span class="glass pill live"><span class="dot red pulse"></span>LIVE</span></div>
+    <div class="stats4" id="world-stats"></div>
+    <div class="glass seg" role="tablist" aria-label="Filter">
+      <button role="tab" data-wf="all" aria-selected="true">All</button>
+      <button role="tab" data-wf="conflict" aria-selected="false">Conflicts</button>
+      <button role="tab" data-wf="quake" aria-selected="false">Quakes</button>
+      <button role="tab" data-wf="hazard" aria-selected="false">Hazards</button>
+    </div>
+    <div class="glass list" id="world-list"><p class="sub empty">Loading…</p></div>
+  </div>
+</section>
+
+<!-- ============ SETTINGS ============ -->
+<section id="v-settings" class="view list-view" aria-label="Settings" hidden>
+  <header class="top"><h1>Settings</h1></header>
+  <div class="scroll">
+    <div class="glass list">
+      <button class="row" data-open="brain"><span class="ico ico-violet"><svg class="i16 fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2c.6 5.3 4.7 9.4 10 10-5.3.6-9.4 4.7-10 10-.6-5.3-4.7-9.4-10-10 5.3-.6 9.4-4.7 10-10z"/></svg></span><span class="grow">Brain &amp; models</span><span class="sub" id="set-brain"></span><span class="chev" aria-hidden="true"></span></button>
+      <button class="row" data-open="screen"><span class="ico ico-cyan"><svg class="i16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg></span><span class="grow">Mac screen</span><span class="chev" aria-hidden="true"></span></button>
+      <button class="row" id="set-weather"><span class="ico ico-amber"><svg class="i16 fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg></span><span class="grow">Weather location</span><span class="sub" id="set-place">Not set</span><span class="chev" aria-hidden="true"></span></button>
+    </div>
+    <p class="group-title">This phone</p>
+    <div class="glass list">
+      <button class="row" role="switch" aria-checked="false" id="sw-faceid"><span class="grow">Unlock with Face ID</span><span class="track"><span class="knob"></span></span></button>
+      <button class="row" role="switch" aria-checked="true" id="sw-speak"><span class="grow">Read Echo's replies aloud</span><span class="track"><span class="knob"></span></span></button>
+    </div>
+    <p class="group-title">Voice at the Mac</p>
+    <div class="glass list">
+      <button class="row" role="switch" aria-checked="false" data-voice="ttsEnabled"><span class="grow">Spoken replies</span><span class="track"><span class="knob"></span></span></button>
+      <button class="row" role="switch" aria-checked="false" data-voice="wakeWord"><span class="grow">Wake word "Echo"</span><span class="track"><span class="knob"></span></span></button>
+      <button class="row" role="switch" aria-checked="false" data-voice="bargeIn"><span class="grow">Talk over Echo to stop it</span><span class="track"><span class="knob"></span></span></button>
+    </div>
+    <p class="group-title">Security</p>
+    <div class="glass list">
+      <div class="row"><span class="grow">API keys</span><span class="sub small row-i"><svg class="i13" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>On your Mac only</span></div>
+      <button class="row" id="sign-out"><span class="grow">Sign out of this phone</span></button>
+      <button class="row danger-row" id="power-btn">Power off Echo…</button>
+    </div>
+    <p class="sub tiny foot" id="version-line">Echo Remote</p>
+  </div>
+</section>
+
+<!-- ============ SCREEN (pushed) ============ -->
+<section id="v-screen" class="view list-view" aria-label="Mac screen" hidden>
+  <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Screen</h1>
+    <div class="head-btns">
+      <button class="bubble b42" id="audio-btn" aria-pressed="false" aria-label="Hear the Mac"><svg class="i19" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg></button>
+      <button class="bubble b42" id="snap-btn" aria-label="Save a screenshot"><svg class="i19" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div></header>
+  <div class="scroll noscroll">
+    <div class="glass stage-wrap"><div class="stage">
+      <video id="screen-video" autoplay playsinline muted></video>
+      <img id="screen-frame" alt="Your Mac's screen" hidden>
+      <audio id="mac-audio" autoplay muted></audio>
+      <span class="glass pill live"><span class="dot red pulse"></span><span id="live-mode">LIVE</span></span>
+      <div class="novid" id="novid"><span>Connecting to your Mac…</span></div>
+    </div></div>
+    <div class="glass seg" role="tablist" aria-label="Control">
+      <button role="tab" data-ctl="pad" aria-selected="true">Trackpad</button>
+      <button role="tab" data-ctl="keys" aria-selected="false">Keyboard</button>
+    </div>
+    <div id="ctl-pad">
+      <div class="glass pad" id="pad" aria-label="Trackpad: drag to move, tap to click, double-tap to double-click"><span>Drag to move · tap to click</span><span class="sub small">Double-tap to double-click</span></div>
+      <div class="btns2">
+        <button class="glass big-btn" data-mouse="click">Left click</button>
+        <button class="glass big-btn" data-mouse="rclick">Right click</button>
+      </div>
+    </div>
+    <div id="ctl-keys" hidden>
+      <form class="glass field" id="type-form"><label for="type-text" class="sr">Type on the Mac</label><input id="type-text" placeholder="Types into the focused field" autocomplete="off" enterkeyhint="send" maxlength="500"><button class="cta b40 round" aria-label="Type it"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></form>
+      <div class="keys">
+        <button class="glass" data-key="esc">esc</button><button class="glass" data-key="tab">tab</button><button class="glass" data-key="return">return</button><button class="glass" data-key="space">space</button>
+        <button class="glass" data-key="cmd+c">⌘ C</button><button class="glass" data-key="cmd+v">⌘ V</button><button class="glass" data-key="cmd+z">⌘ Z</button><button class="glass" data-key="cmd+tab">⌘ tab</button>
+        <button class="glass" data-key="arrow-left" aria-label="Left arrow">←</button><button class="glass" data-key="arrow-up" aria-label="Up arrow">↑</button><button class="glass" data-key="arrow-down" aria-label="Down arrow">↓</button><button class="glass" data-key="arrow-right" aria-label="Right arrow">→</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ BRAIN (pushed) ============ -->
+<section id="v-brain" class="view list-view" aria-label="Brain" hidden>
+  <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Brain</h1></header>
+  <div class="scroll">
+    <div class="glass card brain-now"><span class="spark" aria-hidden="true"><svg class="i26 fill" viewBox="0 0 24 24"><path d="M12 2c.6 5.3 4.7 9.4 10 10-5.3.6-9.4 4.7-10 10-.6-5.3-4.7-9.4-10-10 5.3-.6 9.4-4.7 10-10z"/></svg></span>
+      <div><p class="sub tiny caps">Active route</p><b class="big" id="brain-active">—</b><p class="sub small" id="brain-model"></p></div></div>
+    <div class="glass list" role="radiogroup" aria-label="Brain" id="brain-list"></div>
+    <p class="group-title">Connections</p>
+    <div class="glass list" id="conn-list"></div>
+  </div>
+</section>
+
+<!-- ============ TAB BAR ============ -->
+<nav class="glass tabbar" aria-label="Pages" id="tabbar" hidden>
+  <button data-tab="home" aria-current="page"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>Echo</button>
+  <button data-tab="chat"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18l-1 3 4-1.5A9 8 0 1 0 5 18z"/></svg>Chat<span class="badge" id="chat-badge" hidden></span></button>
+  <button data-tab="missions"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>Missions</button>
+  <button data-tab="world"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3.2 3 3.2 14 0 17M12 3.5c-3.2 3-3.2 14 0 17"/></svg>World</button>
+  <button data-tab="settings"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3h-4.4l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4.4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>Settings</button>
+</nav>
+
+<!-- ============ SHEETS ============ -->
+<div class="scrim" id="scrim" hidden></div>
+<section class="glass sheet" id="sheet-approval" role="dialog" aria-modal="true" aria-labelledby="ap-title" hidden>
+  <span class="grabber" aria-hidden="true"></span>
+  <div class="row-i gap14"><span class="warn-badge lg" aria-hidden="true"><svg class="i26" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg></span>
+    <div><h2 id="ap-title">Echo needs your OK</h2><p class="sub" id="ap-tier"></p></div></div>
+  <div class="glass inset"><p class="sub tiny caps">On your Mac</p><p class="mono" id="ap-text"></p></div>
+  <div class="btns2"><button class="glass big-btn" id="ap-deny">Deny</button><button class="cta big-btn" id="ap-approve">Approve</button></div>
+  <p class="sub tiny center">If you don't answer, Echo won't do it.</p>
+</section>
+<section class="glass sheet" id="sheet-power" role="dialog" aria-modal="true" aria-labelledby="po-title" hidden>
+  <span class="grabber" aria-hidden="true"></span>
+  <span class="power-orb" aria-hidden="true"><svg class="i32" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg></span>
+  <h2 id="po-title">Power off Echo?</h2>
+  <p class="sub center">Echo stops listening, closes its connections and quits on your Mac. This app goes offline until you start Echo at the Mac again.</p>
+  <button class="danger-cta big-btn" id="po-confirm"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9v1.5M15 9v1.5M12 9v4l-1 1M9.5 16.5c1.4 1 3.6 1 5 0"/></svg>Power off with Face ID</button>
+  <button class="glass big-btn" data-close>Cancel</button>
+</section>
+<section class="glass sheet" id="sheet-place" role="dialog" aria-modal="true" aria-labelledby="pl-title" hidden>
+  <span class="grabber" aria-hidden="true"></span>
+  <h2 id="pl-title">Weather location</h2>
+  <button class="glass big-btn" id="pl-here"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/></svg>Use my current location</button>
+  <form class="glass field" id="pl-form"><label for="pl-q" class="sr">Search for a city</label><input id="pl-q" placeholder="Search for a city" autocomplete="off" enterkeyhint="search"><button class="bubble b40" aria-label="Search"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button></form>
+  <div class="glass list" id="pl-results" hidden></div>
+  <button class="glass big-btn" data-close>Done</button>
+</section>
+
+<div class="toast glass" id="toast" role="status" aria-live="polite"></div>
+<script src="/app.js" defer></script>
+</body>
+</html>

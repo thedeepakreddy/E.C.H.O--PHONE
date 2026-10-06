@@ -1,0 +1,13 @@
+{
+  "name": "echo-remote",
+  "version": "1.0.0",
+  "description": "Echo's phone app and the relay that connects it to Echo on your Mac.",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/"
+  }
+}

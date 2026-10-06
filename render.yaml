@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: echo-remote
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: RELAY_SECRET
+        sync: false
