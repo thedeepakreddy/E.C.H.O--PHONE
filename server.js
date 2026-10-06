@@ -28,11 +28,11 @@
  * Node's standard library only, no dependencies.
  */
 import http from "node:http";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deriveKeys, verifyPass } from "./lib/secure.js";
+import { deriveKeys, verifyPass, seal, unseal } from "./lib/secure.js";
 import { createStore } from "./lib/store.js";
 import { createGemini } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
@@ -72,7 +72,8 @@ const FORWARDED = new Set([
 export const CLOUD_RATE = 30;
 export const CLOUD_BODY = 256 * 1024;
 export const CLOUD_VOICE_BODY = 4 * 1024 * 1024;
-export const ICS_TTL_MS = 10 * 60_000;
+/** How long a calendar link from Phone mode keeps working. */
+export const ICS_TTL_MS = 30 * 86400_000;
 
 /**
  * World intelligence for the World page, from Osiris (osirisai.live): conflict
@@ -138,7 +139,18 @@ export function createRelay({
     await store.setCount("passgen", n).catch(() => {});
   }
   const cloudHits = new Map();
-  const icsCache = new Map();
+  /**
+   * A calendar link that needs no storage: the event is sealed into the address
+   * itself (encrypted, so the address shows nothing personal), with an expiry.
+   * Made when the button is, so tapping it can open Safari immediately.
+   */
+  const icsUrl = (event) => `/ics/${seal(keys.store, { e: event, exp: now() + ICS_TTL_MS })}.ics`;
+  function icsFromUrl(token) {
+    try {
+      const { e, exp } = unseal(keys.store, token);
+      return exp > now() && validEvent(e) ? e : null;
+    } catch { return null; }
+  }
   /** Phone requests waiting for Echo to collect them. */
   const queue = [];
   /** Echo's polls waiting for a phone request. */
@@ -379,10 +391,7 @@ export function createRelay({
       try {
         const { event } = await readJson(req, 16 * 1024);
         if (!validEvent(event)) return send(res, 400, { error: "input", message: "That event is missing a title or time." });
-        const id = randomUUID();
-        icsCache.set(id, { ics: buildIcs(event, { uid: id, now: now() }), exp: now() + ICS_TTL_MS });
-        for (const [k, v] of icsCache) if (v.exp <= now()) icsCache.delete(k);
-        return send(res, 200, { url: `/ics/${id}.ics` });
+        return send(res, 200, { url: icsUrl(event) });
       } catch (e) { return sendCloudError(res, e); }
     }
     if (path === "/cloud/chat" || path === "/cloud/voice") {
@@ -391,12 +400,14 @@ export function createRelay({
       try {
         const body = await readJson(req, path === "/cloud/voice" ? CLOUD_VOICE_BODY : CLOUD_BODY);
         const context = { ...(body.context && typeof body.context === "object" ? body.context : {}), macOnline: online() };
+        let result;
         if (path === "/cloud/voice") {
           const audio = String(body.audio ?? "");
           if (!/^[A-Za-z0-9+/=]{100,}$/.test(audio)) return send(res, 400, { error: "input", message: "That recording didn't come through." });
-          return send(res, 200, await cloud.chat({ history: body.history, audio, context }));
-        }
-        return send(res, 200, await cloud.chat({ history: body.history, text: body.text, context }));
+          result = await cloud.chat({ history: body.history, audio, context });
+        } else result = await cloud.chat({ history: body.history, text: body.text, context });
+        for (const a of result.actions) if (a.type === "calendar" && validEvent(a.data)) a.url = icsUrl(a.data);
+        return send(res, 200, result);
       } catch (e) { return sendCloudError(res, e); }
     }
     return send(res, 404, "Not found");
@@ -431,11 +442,12 @@ export function createRelay({
     if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory" } });
     if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
     if (path === "/cron/tick" && req.method === "POST") return void cronTick(req, res);
-    const ics = /^\/ics\/([0-9a-f-]{36})\.ics$/.exec(path);
+    const ics = /^\/ics\/(v1\.[A-Za-z0-9_-]{20,4000})\.ics$/.exec(path);
     if (ics && req.method === "GET") {
-      const hit = icsCache.get(ics[1]);
-      if (!hit || hit.exp <= now()) return send(res, 404, "This calendar link has expired. Tap the button in Echo again.");
-      return send(res, 200, hit.ics, { "content-type": "text/calendar; charset=utf-8", "content-disposition": 'inline; filename="echo-event.ics"' });
+      const event = icsFromUrl(ics[1]);
+      if (!event) return send(res, 404, "This calendar link has expired. Ask Echo again.");
+      const uid = createHash("sha256").update(ics[1]).digest("hex").slice(0, 32); // the same link always makes the same event
+      return send(res, 200, buildIcs(event, { uid, now: now() }), { "content-type": "text/calendar; charset=utf-8", "content-disposition": 'inline; filename="echo-event.ics"' });
     }
     if (path === "/world" && req.method === "GET") {
       return void getWorld().then(({ raw, ...w }) => send(res, 200, w, { "cache-control": "no-store" }))

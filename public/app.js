@@ -769,13 +769,36 @@
   // Buttons under Phone mode's answers. Nothing happens until one is tapped.
   async function makeIcs(a) {
     const d = await cloudApi("/cloud/ics", { event: a.data });
-    a.url = d.url; a.urlUntil = Date.now() + 9 * 60_000;
+    a.url = d.url;
     saveCache();
     return d.url;
   }
   function prepareActions(m) {
-    // Calendar files are made ahead, so a tap can open Safari straight away.
-    for (const a of m.actions || []) if (a.type === "calendar") makeIcs(a).catch(() => {});
+    // Calendar links normally arrive with the answer; older ones are made now,
+    // so a tap can open Safari straight away.
+    for (const a of m.actions || []) if (a.type === "calendar" && !a.url) makeIcs(a).catch(() => {});
+  }
+  const eventWhen = (local) => { const d = new Date(local); return isNaN(d) ? local : d.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
+  /**
+   * A Home Screen app can't open a calendar file itself (its in-app browser
+   * shows a white page), so the link goes to the Safari app, which offers
+   * "Add to Calendar". If Safari doesn't come up, a sheet offers the link.
+   */
+  function openCalendar(a) {
+    if (!a.url) { makeIcs(a).then(() => toast("Ready. Tap the button again.")).catch((e) => toast(cloudProblem(e), true)); return; }
+    const link = new URL(a.url, location.origin).href;
+    if (!standalone) { location.href = link; return; }
+    location.href = `x-safari-${link}`;
+    setTimeout(() => { if (!document.hidden) showCalendarHelp(a, link); }, 1500);
+  }
+  function showCalendarHelp(a, link) {
+    $("cal-title").textContent = a.data.title;
+    $("cal-when").textContent = `${eventWhen(a.data.start)}${a.data.location ? ` · ${a.data.location}` : ""}`;
+    $("cal-copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(link); toast("Link copied. Paste it into Safari."); }
+      catch { toast("Couldn't copy the link.", true); }
+    };
+    openSheet("sheet-cal");
   }
   async function runAction(a, btn) {
     if (a.type === "link") return void window.open(a.data.url, "_blank", "noopener");
@@ -784,13 +807,7 @@
       location.href = `shortcuts://run-shortcut?${q}`;
       return;
     }
-    if (a.type === "calendar") {
-      if (a.url && a.urlUntil > Date.now()) return void window.open(a.url, "_blank");
-      const w = window.open("about:blank", "_blank"); // opened inside the tap, filled once the file is ready
-      try { const url = await makeIcs(a); if (w) w.location.href = url; else window.open(url, "_blank"); }
-      catch (e) { if (w) w.close(); toast(cloudProblem(e), true); }
-      return;
-    }
+    if (a.type === "calendar") return openCalendar(a);
     if (a.type === "mac") {
       if (!(S && macOnline)) return toast("Your Mac is offline. Try again when it's on.", true);
       btn.setAttribute("aria-busy", "true");

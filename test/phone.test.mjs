@@ -131,7 +131,7 @@ test("Phone mode runs its own tools, and everything else becomes a button", asyn
   const weatherReply = seen[1].contents.at(-1).parts[0].functionResponse;
   assert.equal(weatherReply.id, "c1", "the call id goes back with the result");
   assert.equal(weatherReply.response.place, "Paris, France");
-  assert.match(seen[2].contents.at(-1).parts[0].functionResponse.response.note, /Nothing happens until the user taps/);
+  assert.match(seen[2].contents.at(-1).parts[0].functionResponse.response.note, /never say you have set, added, sent or scheduled/);
   assert.match(seen[0].systemInstruction.parts[0].text, /Europe\/Budapest/);
   assert.equal(r.usage.requests, 3);
   assert.equal(r.usage.messages, 1);
@@ -253,19 +253,28 @@ test("relay: without a Gemini key Phone mode says how to set it up", async () =>
   } finally { await r.close(); }
 });
 
-test("relay: calendar links work once, briefly, and carry no personal data in the address", async () => {
-  const r = await startRelay({});
+test("relay: calendar links are sealed, long-lived and come with the answer", async () => {
+  let t = NOW;
+  const r = await startRelay({ now: () => t, gemini: scripted([call("remind_me", { text: "Plan dinner", when: "2026-10-08T18:00" }), text("Tap the button to set it.")]) });
   try {
-    const pass = signPass(r.relay.keys.pass, { device: DEVICE, gen: 0 });
+    const pass = signPass(r.relay.keys.pass, { device: DEVICE, gen: 0, now: NOW });
     const made = await fetch(`${r.base}/cloud/ics`, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify({ event: { title: "Dentist", start: "2026-10-09T13:30" } }) });
     const { url } = await made.json();
-    assert.match(url, /^\/ics\/[0-9a-f-]{36}\.ics$/);
+    assert.match(url, /^\/ics\/v1\.[A-Za-z0-9_-]+\.ics$/);
+    assert.doesNotMatch(url, /Dentist/, "the address shows nothing personal");
     const ics = await fetch(r.base + url);
     assert.equal(ics.headers.get("content-type"), "text/calendar; charset=utf-8");
     assert.match(await ics.text(), /SUMMARY:Dentist/);
-    assert.equal((await fetch(`${r.base}/ics/00000000-0000-0000-0000-000000000000.ics`)).status, 404);
+    const tampered = url.replace(/v1\.(.)/, (m, c) => `v1.${c === "A" ? "B" : "A"}`);
+    assert.equal((await fetch(r.base + tampered)).status, 404, "an edited link opens nothing");
     const bad = await fetch(`${r.base}/cloud/ics`, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify({ event: { title: "x", start: "soon" } }) });
     assert.equal(bad.status, 400);
+    // A reminder button arrives with its link, so a tap can open Safari at once.
+    const chat = await (await fetch(`${r.base}/cloud/chat`, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify({ text: "remind me", history: [] }) })).json();
+    assert.equal(chat.actions[0].type, "calendar");
+    assert.match(chat.actions[0].url, /^\/ics\/v1\./);
+    t += 31 * 86400_000;
+    assert.equal((await fetch(r.base + url)).status, 404, "links expire after 30 days");
   } finally { await r.close(); }
 });
 
