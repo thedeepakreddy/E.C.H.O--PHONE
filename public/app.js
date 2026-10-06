@@ -2851,7 +2851,22 @@
       (d.ice || []).forEach((c) => pc.addIceCandidate(c).catch(() => {}));
     }).catch(() => {}).then(() => { if (pc && !rtcConnected) setTimeout(pollAnswer, 1000); });
   }
-  function closeScreen() { stopFrames(); }
+  /**
+   * Leaving the screen ends its stream, sound included. It used to stay open:
+   * the Mac's sound (Echo speaking there) kept coming to this phone, and iPhone
+   * played it the moment its audio woke up, such as a Listen tap: the "ghost voice".
+   */
+  function closeScreen() {
+    stopFrames();
+    clearTimeout(fallback);
+    if (pc) { const old = pc; pc = null; try { old.close(); } catch { /* already closed */ } }
+    rtcConnected = false; answered = false;
+    const a = $("mac-audio");
+    try { a.pause(); } catch { /* fine */ }
+    a.srcObject = null; a.muted = true;
+    $("audio-btn").setAttribute("aria-pressed", "false");
+    if (video.srcObject) { video.srcObject = null; $("novid").hidden = false; }
+  }
   function startFrames() { if (framesOn || currentView !== "screen") return; framesOn = true; $("live-mode").textContent = "SNAPSHOTS"; nextFrame(); }
   function stopFrames() { framesOn = false; frame.hidden = true; $("live-mode").textContent = "LIVE"; }
   async function nextFrame() {
