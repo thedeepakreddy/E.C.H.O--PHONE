@@ -2180,17 +2180,48 @@
     setTimeout(() => input.focus(), 50);
     return new Promise((resolve) => { askResolve = resolve; });
   }
-  async function runEcho(task) {
+  /**
+   * Gemini's free tier allows only a few requests a minute. A step that hits
+   * that limit (or a hiccup reaching the relay) waits and tries again, up to 3
+   * times, with a countdown; Take over stops the wait.
+   */
+  const RETRYABLE = (e) => !e.status || e.status >= 500 || ["minute", "busy"].includes(e.data && e.data.error);
+  async function stepWithRetry(run, payload) {
+    for (let attempt = 0; ; attempt++) {
+      try { return await cloudApi("/cloud/browse/step", payload, { signal: run.abort.signal }); }
+      catch (e) {
+        if (run.stopped || e.name === "AbortError" || attempt >= 3 || !RETRYABLE(e)) throw e;
+        const limited = e.status === 429;
+        await countdown(run, limited ? 20 + attempt * 15 : 5, limited ? "Free tier: a few requests a minute" : "Echo couldn't be reached");
+      }
+    }
+  }
+  function countdown(run, seconds, why) {
+    return new Promise((resolve) => {
+      let left = seconds;
+      const tick = () => {
+        if (run.stopped || left <= 0) { clearInterval(t); resolve(); return; }
+        renderRun(`Waiting for Gemini · ${left} s`, `${why}; Echo carries on by itself.`);
+        left--;
+      };
+      const t = setInterval(tick, 1000);
+      tick();
+    });
+  }
+  /** `resume`: a run that failed, picked up where it stopped (its steps and notes kept). */
+  async function runEcho(task, resume = null) {
     if (!passValid()) return toast("Sign in once with your Mac online to use the Browser.", true);
     if (br.run) return toast("Echo is already on it. Tap Take over to stop.");
     if (currentView !== "browser") show("browser");
     try { await browserSession(); } catch (e) { return toast(cloudProblem(e), true); }
-    const run = br.run = { task, steps: [], notes: [], sources: [], part: 1, stopped: false, abort: new AbortController() };
+    const run = br.run = resume
+      ? { ...resume, stopped: false, abort: new AbortController() }
+      : { task, steps: [], notes: [], sources: [], part: 1, stopped: false, abort: new AbortController() };
     $("br-result").hidden = true;
     $("br-ask").hidden = true;
     $("br-panel").classList.add("running");
-    renderRun("Echo is browsing", "Looking at the page…");
-    let answer = null, success = false;
+    renderRun("Echo is browsing", resume ? `Carrying on from step ${run.steps.length + 1}…` : "Looking at the page…");
+    let answer = null, success = false, failed = false;
     try {
       while (!run.stopped) {
         if (run.steps.length >= MAX_RUN_STEPS) { answer = `I stopped after ${MAX_RUN_STEPS} steps without finishing.`; break; }
@@ -2198,9 +2229,9 @@
         const parts = Math.max(1, Math.ceil(br.snap.text.length / PART));
         run.part = Math.min(run.part, parts);
         const text = br.snap.text.slice((run.part - 1) * PART, run.part * PART);
-        const d = await cloudApi("/cloud/browse/step", {
-          task, page: { url: br.url, title: br.title, text, part: run.part, parts }, steps: run.steps, notes: run.notes, context: { tz: localTz() },
-        }, { signal: run.abort.signal });
+        const d = await stepWithRetry(run, {
+          task: run.task, page: { url: br.url, title: br.title, text, part: run.part, parts }, steps: run.steps, notes: run.notes, context: { tz: localTz() },
+        });
         if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
         run.notes.push(...(d.notes || []));
         for (const s2 of d.sources || []) if (!run.sources.some((x) => x.url === s2.url)) run.sources.push(s2);
@@ -2213,11 +2244,14 @@
         run.steps.push({ action: a.name, args: a.args, result });
       }
     } catch (e) {
-      if (!run.stopped) answer = e.name === "AbortError" ? null : e.status ? cloudProblem(e) : "Something went wrong while browsing.";
+      if (!run.stopped && e.name !== "AbortError") {
+        failed = true;
+        answer = e.status ? cloudProblem(e) : "Something went wrong while browsing.";
+      }
     }
-    finishRun(run, answer, success);
+    finishRun(run, answer, success, failed);
   }
-  function finishRun(run, answer, success) {
+  function finishRun(run, answer, success, failed = false) {
     if (br.run !== run) return;
     br.run = null;
     $("br-panel").classList.remove("running");
@@ -2228,15 +2262,24 @@
     clear(box);
     box.hidden = false;
     const head = el("div", "row-i br-result-head");
-    head.append(el("b", "grow", success ? "Echo finished" : "Echo stopped"));
+    head.append(el("b", "grow", failed ? "Echo couldn't go on" : success ? "Echo finished" : "Echo stopped"));
     const close = el("button", "glass small-pill", "Close"); close.addEventListener("click", () => { box.hidden = true; });
     head.appendChild(close);
     box.append(head, el("p", "br-answer", answer));
+    if (failed || !success) {
+      // Failed (Gemini's limit, no connection): carry on from the step it reached.
+      // Echo gave up by itself: start the task again.
+      const again = el("button", "cta big-btn br-retry", failed ? `Retry${run.steps.length ? ` from step ${run.steps.length + 1}` : ""}` : "Try again");
+      again.addEventListener("click", () => { box.hidden = true; runEcho(run.task, failed ? run : null); });
+      box.appendChild(again);
+      if (failed && run.steps.length) box.appendChild(el("p", "fine", `${run.steps.length} step${run.steps.length === 1 ? "" : "s"} done so far are kept.`));
+    }
     if (run.sources.length) {
       const srcs = el("div", "srcs");
       for (const s2 of run.sources.slice(0, 4)) { const l = el("button", "glass small-pill", s2.title); l.addEventListener("click", () => goTo(s2.url)); srcs.appendChild(l); }
       box.appendChild(srcs);
     }
+    if (failed) return; // only finished tasks go to the chat
     // The chat keeps it too (and the Mac gets it with Phone mode's other messages).
     const at = Date.now();
     putMessage({ k: newKey(), at, from: "you", text: `🌐 ${run.task}`, kind: "text", src: "phone" });
