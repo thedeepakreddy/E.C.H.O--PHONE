@@ -2014,13 +2014,50 @@
     }
     return `<button>${tidy(e.innerText || e.getAttribute("aria-label") || e.title, 80) || "button"}</button>`;
   }
+  /**
+   * A search engine's results page as a clean, numbered list: title, address,
+   * snippet. The rest of such a page is menus, filters and ads, which is what
+   * made Echo search again and again instead of opening a result.
+   */
+  function searchResults(doc) {
+    let u;
+    try { u = new URL(br.url); } catch { return null; }
+    if (!/(^|\.)bing\.com$/.test(u.hostname) || !u.pathname.startsWith("/search")) return null;
+    const items = [];
+    for (const li of doc.querySelectorAll("li.b_algo")) {
+      const link = li.querySelector(".b_algoheader a[href], h2 a[href]") || li.querySelector("a[href]");
+      const to = link && realUrl(link.href);
+      if (!to || /(^|\.)bing\.com$/.test(hostOf(to))) continue;
+      const snippet = li.querySelector(".b_caption p, p");
+      items.push({ link, title: tidy(link.innerText || to, 120), url: to, snippet: tidy(snippet && snippet.innerText, 220) });
+      if (items.length >= 10) break;
+    }
+    if (!items.length) return null;
+    const next = doc.querySelector("a.sb_pagN[href], a[aria-label='Next page'][href], a[title='Next page'][href]");
+    return { query: u.searchParams.get("q") || "", items, next };
+  }
   function pageSnapshot() {
     const doc = frameDoc();
     if (!doc || !doc.body || brFrame.hidden) return { text: "", elements: [] };
+    const results = searchResults(doc);
+    if (results) {
+      const elements = [];
+      const lines = [`Search results for "${results.query}" (only the results are shown; the rest of this page is menus and ads):`];
+      for (const r of results.items) {
+        elements.push(r.link);
+        lines.push(`[${elements.length}]<link>${r.title}</link> — ${r.url}${r.snippet ? `\n    ${r.snippet}` : ""}`);
+      }
+      if (results.next) { elements.push(results.next); lines.push(`[${elements.length}]<link>Next page of results</link>`); }
+      return { text: lines.join("\n"), elements };
+    }
     const win = brFrame.contentWindow;
     const elements = [], out = [];
+    // The page's main content first, then the rest (menus, sidebars, footer).
+    const main = [...doc.querySelectorAll("main, [role=main], article, #content, #main, #mw-content-text")].find((m) => (m.innerText || "").trim().length > 400) || null;
+    let skipNode = null;
     const walk = (node) => {
       if (node.nodeType === 3) { const t = node.nodeValue.replace(/\s+/g, " "); if (t.trim()) out.push(t); return; }
+      if (node === skipNode) return;
       if (node.nodeType !== 1 || SKIP.test(node.tagName)) return;
       if (node.hidden || node.getAttribute("aria-hidden") === "true") return;
       const st = win.getComputedStyle(node);
@@ -2036,6 +2073,11 @@
       for (const c of node.childNodes) walk(c);
       if (BLOCK.test(node.tagName)) out.push("\n");
     };
+    if (main) {
+      walk(main);
+      out.push("\n\n--- rest of the page (menus, links, footer) ---\n");
+      skipNode = main;
+    }
     walk(doc.body);
     const text = out.join("").replace(/[ \t ]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
     return { text, elements };
@@ -2197,7 +2239,13 @@
         return `Chose "${tidy(opt.text, 60)}".`;
       }
       case "open_url": return settle(() => goTo(a.args.url));
-      case "search": return settle(() => goInput(a.args.query, true));
+      case "search": {
+        const where = await settle(() => goInput(a.args.query, true));
+        const doc = frameDoc();
+        const res = doc && searchResults(doc);
+        if (!res) return where;
+        return `${where}. Top results: ${res.items.slice(0, 6).map((r, k) => `${k + 1}. ${tidy(r.title, 70)} — ${r.url}`).join(" | ")}`;
+      }
       case "back": return br.back.length ? settle(() => loadPath(pagePath(br.back.pop()), "back")) : "There's no page to go back to.";
       case "read_more": {
         run.part++;
@@ -2325,6 +2373,9 @@
         st.history.push({ action: a.name, args: a.args, result, sig });
         if (a.name !== "read_more" && a.name !== "ask_user") run.part = ["click", "back", "open_url", "search"].includes(a.name) || (a.name === "type" && a.args.submit) ? 1 : run.part;
         if (repeats >= 2) { why = `I did the same thing (${a.name}) three times without getting anywhere.`; break; }
+        // Searching again and again without opening anything: say so (it's what Echo got stuck on).
+        const lastNames = st.history.slice(-3).map((h) => h.action);
+        if (lastNames.length === 3 && lastNames.every((n) => n === "search")) st.history[st.history.length - 1].result += " You've now searched 3 times in a row: open the most relevant result (click its number or open_url its address) instead of searching again.";
       }
       if (run.stopped) return "stopped";
       st.lastFail = why || `It took more than ${MAX_ACTIONS_PER_TRY} actions without finishing this step.`;
