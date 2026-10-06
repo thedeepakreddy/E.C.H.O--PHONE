@@ -858,6 +858,25 @@ export function createRelay({
     return hits.length > max;
   }
 
+  /**
+   * Can this server reach the web? A few fixed pages, fetched the Browser's
+   * way; no input, so it can't be pointed anywhere else. Kept for a minute.
+   */
+  let selfTest = null;
+  function browseSelfTest() {
+    if (selfTest && now() - selfTest.at < 60_000) return selfTest.result;
+    const sites = ["https://en.wikipedia.org/wiki/Budapest", SEARCH_URL("budapest"), "https://www.bing.com/search?q=budapest", "https://www.mojeek.com/search?q=budapest", "https://search.brave.com/search?q=budapest"];
+    const result = Promise.all(sites.map(async (u) => {
+      const t0 = Date.now();
+      try {
+        const r = await fetchUpstream({ url: u, headers: { "user-agent": UA, accept: "text/html", "accept-language": "en-US,en;q=0.9" }, timeoutMs: 10_000, anyHost: browseAnyHost });
+        return { site: new URL(u).hostname, status: r.status, bytes: r.body.length, ms: Date.now() - t0, location: r.headers.location ? String(r.headers.location).slice(0, 80) : undefined };
+      } catch (e) { return { site: new URL(u).hostname, error: e?.code ?? String(e?.message ?? e), ms: Date.now() - t0 }; }
+    })).then((rows) => ({ at: new Date(now()).toISOString(), rows }));
+    selfTest = { at: now(), result };
+    return result;
+  }
+
   async function browseRoute(req, res, url) {
     const path = url.pathname;
     const who = await browseClaims(req);
@@ -981,6 +1000,7 @@ export function createRelay({
     const path = url.pathname;
     if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", app: APP_VERSION, phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
     if (path === "/version") return send(res, 200, { app: APP_VERSION });
+    if (path === "/b/selftest" && req.method === "GET") return void browseSelfTest().then((r) => send(res, 200, r));
     if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
     if (path.startsWith("/b/")) return void browseRoute(req, res, url).catch(() => { if (!res.headersSent) sendPage(res, 502, notePage("Couldn't open that page", "Something went wrong. Try again.")); });
     if (path === "/cron/tick" && req.method === "POST") return void cronTick(req, res);
