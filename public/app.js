@@ -144,7 +144,7 @@
     if (view === "mac") renderMacPage();
     if (view === "browser") openBrowser();
     if (view === "screen") openScreen(); else closeScreen();
-    if (view === "missions") { if (last) renderMissions(last); renderHandoffs(); loadHandoffs(); }
+    if (view === "missions") { setSeg(seg); renderMissions(); renderHandoffs(); loadHandoffs(); }
     if (view === "brain" && last) renderBrain(last);
   }
   document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
@@ -425,12 +425,12 @@
       const d = await api(`/status?logs=${logsAfter}${passFresh() ? "" : `&pass=${DEV}`}`);
       if (d.cloudPass) { const had = passValid(); savePass(d.cloudPass); if (!had) refreshCloud(); }
       offline = false;
-      last = d;
+      last = d; lastStatusAt = Date.now();
       for (const l of d.logs || []) { logsAfter = Math.max(logsAfter, l.id); if (l.kind !== "user") lastActivity = l; }
       macChip = (d.vitals && d.vitals.chip) ? d.vitals.chip.replace(/^Apple /, "Mac · ") : "Your Mac";
       markMac(true);
       if (d.faceId && d.faceId.registered && !pkIds().length && !pkAsked) { pkAsked = true; api("/passkey/options?purpose=confirm").then((o) => rememberPasskeys(o.allowCredentials)).catch(() => {}); }
-      if (currentView === "missions") renderMissions(d);
+      if (currentView === "missions") renderMissions();
       if (currentView === "brain") renderBrain(d);
       renderSettings(d);
     } catch (e) {
@@ -443,10 +443,12 @@
     // "Back" only after this phone actually saw it go away, not on the first answer after opening.
     if (on && !macOnline) { dismissedBack = !macOfflineSince; dismissedOffline = false; macOfflineSince = 0; }
     if (!on && !macOfflineSince) macOfflineSince = Date.now();
+    const changed = macOnline !== on;
     macOnline = on;
     renderMode();
     renderBanners();
     if (on) syncToMac();
+    if (changed && currentView === "missions") renderMissions(); // "Running" becomes "Last seen running", and back
   }
   const prettyModel = (m) => String(m || "").replace(/-preview.*$/, "").replace(/^gemini-/i, "Gemini ").replace(/-([a-z])/g, (_, c) => ` ${c.toUpperCase()}`).replace("Flash Lite", "Flash-Lite");
   function cloudLine() {
@@ -917,12 +919,15 @@
   input.addEventListener("input", () => { autosize(); setComposerMode(); });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
   function restoreInput(text) { input.value = text; autosize(); setComposerMode(); }
+  /** A draft about the Mac's own work (missions, projects): it goes to the Mac even in Phone mode. */
+  let macDraft = false;
   async function sendChat(text = input.value) {
     text = String(text).trim();
     if (!text) return;
     restoreInput("");
     input.placeholder = "Message";
-    if (mode === "phone") return sendCloud(text);
+    const toMac = macDraft; macDraft = false;
+    if (mode === "phone" && !toMac) return sendCloud(text);
     try {
       const d = await api("/chat", { json: { text } });
       if (d.message) {
@@ -1158,12 +1163,52 @@
   $("chat-talk").addEventListener("click", () => (note ? finishNote(true) : startNote()));
 
   // ---------- missions ----------
-  let seg = "missions", armed = "";
-  document.querySelectorAll("[data-seg]").forEach((b) => b.addEventListener("click", () => {
-    seg = b.dataset.seg;
-    document.querySelectorAll("[data-seg]").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
-    ["missions", "agents", "projects"].forEach((k) => ($(`seg-${k}`).hidden = k !== seg));
-  }));
+  // What Echo on the Mac is working on (its /status: missions, agents,
+  // projects), and the jobs left here for it (hand-offs, kept by the relay).
+  // The Mac's lists need it signed in and online; hand-offs work without it.
+  let seg = "missions", armed = "", lastStatusAt = 0;
+  const MISSION_STATE = { completed: ["Done", "#3ee6b0"], partial: ["Partly done", "#ffb35c"], blocked: ["Blocked", "#ffb35c"], failed: ["Failed", "#ff6b6b"], cancelled: ["Stopped", "#8fa3aa"] };
+  /** The Mac's step statuses as the page draws them (it says "completed", not "done"). */
+  const STEP_CLASS = { completed: "done", done: "done", working: "working", running: "working", partial: "partial", blocked: "failed", failed: "failed", cancelled: "cancelled" };
+  const PHASE = { completed: ["Done", "#3ee6b0"], implementing: ["Building", "#5ee7f5"], verifying: ["Checking", "#5ee7f5"], previewing: ["Preview", "#5ee7f5"], deploying: ["Deploying", "#5ee7f5"],
+    planning: ["Planning", "#ffb35c"], clarifying: ["Clarifying", "#ffb35c"], "waiting-for-input": ["Needs you", "#ffb35c"], blocked: ["Blocked", "#ff6b6b"], failed: ["Failed", "#ff6b6b"], cancelled: ["Stopped", "#8fa3aa"] };
+  const cap = (t) => (t ? `${String(t)[0].toUpperCase()}${String(t).slice(1)}` : "");
+  /** Running missions, working agents and projects waiting on you, on their tabs. */
+  function segCounts(n) {
+    document.querySelectorAll("[data-seg]").forEach((b) => {
+      const k = b.dataset.seg;
+      const label = { missions: "Missions", agents: "Agents", projects: "Projects" }[k];
+      b.textContent = n[k] ? `${label} · ${n[k]}` : label;
+    });
+  }
+  function setSeg(k) {
+    seg = k;
+    document.querySelectorAll("[data-seg]").forEach((x) => x.setAttribute("aria-selected", String(x.dataset.seg === k)));
+    ["missions", "agents", "projects"].forEach((n) => ($(`seg-${n}`).hidden = n !== k));
+    $("handoff-box").hidden = k !== "missions"; // jobs for the Mac belong with missions
+  }
+  document.querySelectorAll("[data-seg]").forEach((b) => b.addEventListener("click", () => setSeg(b.dataset.seg)));
+  /** Ask Echo on the Mac about its own work: in the chat, sent to the Mac whatever the mode. */
+  function askMac(text) {
+    if (!(S && macOnline)) return toast("That needs your Mac, and it isn't connected right now.", true);
+    show("chat");
+    macDraft = true;
+    restoreInput(text);
+    input.placeholder = "Message your Mac";
+    input.focus();
+  }
+  /** Why the Mac's lists are empty or old: not signed in, or offline (showing what it last said). */
+  function macNote() {
+    if (!(T && S)) {
+      const c = el("section", "glass bcard");
+      c.append(el("p", "", "Your Mac's missions, agents and projects show here when it's connected."));
+      const b = el("button", "glass small-pill", "Settings → Your Mac"); b.addEventListener("click", () => show("mac"));
+      c.appendChild(b);
+      return c;
+    }
+    if (!macOnline) return el("p", "fine mac-note", lastStatusAt ? `Your Mac is offline. This is what it was doing at ${clock(lastStatusAt)}.` : "Your Mac is offline.");
+    return null;
+  }
   function ring(pct) {
     const NS = "http://www.w3.org/2000/svg", svg = document.createElementNS(NS, "svg");
     svg.setAttribute("width", "52"); svg.setAttribute("height", "52"); svg.setAttribute("viewBox", "0 0 52 52"); svg.classList.add("ring");
@@ -1178,65 +1223,86 @@
     svg.append(c1, c2, t);
     return svg;
   }
-  function renderMissions(d) {
-    const box = $("seg-missions"); clear(box);
-    const missions = d.missions || [];
-    if (!missions.length) box.appendChild(Object.assign(el("div", "glass list"), {})).appendChild(el("p", "sub empty", "No missions yet. Ask Echo to build or research something."));
+  function renderMissions(d = last) {
+    const stale = !macOnline;
+    const box = $("seg-missions"), ag = $("seg-agents"), pj = $("seg-projects");
+    clear(box); clear(ag); clear(pj);
+    for (const target of [box, ag, pj]) { const n = macNote(); if (n) target.appendChild(n); }
+    if (!d || !(T && S)) { segCounts({}); return; }
+    const missions = Array.isArray(d.missions) ? d.missions : [];
+    if (!missions.length) box.appendChild(Object.assign(el("div", "glass list"))).appendChild(el("p", "sub empty", "No missions yet. Ask Echo to build or research something."));
     const running = missions.filter((m) => m.status === "running"), done = missions.filter((m) => m.status !== "running");
     for (const m of running) {
-      const steps = m.steps || [];
-      const finished = steps.filter((s) => /^(done|completed)$/.test(s.status)).length;
+      const steps = Array.isArray(m.steps) ? m.steps : [];
+      const finished = steps.filter((s) => STEP_CLASS[s.status] === "done").length;
       const pct = steps.length ? Math.round(finished / steps.length * 100) : 5;
-      const card = el("section", "glass mission");
+      const card = el("section", `glass mission${stale ? " stale" : ""}`);
       const top = el("div", "mission-top"); top.appendChild(ring(pct));
-      const txt = el("div", "grow"); txt.append(el("b", "", m.goal), el("span", "sub small", `${m.id.startsWith("supervised.") ? "Supervised" : "Mission"} · ${steps.length ? `step ${Math.min(finished + 1, steps.length)} of ${steps.length}` : "starting"} · ${dur(Date.now() - m.createdAt)}`));
-      const live = el("span", "small row-i"); live.style.color = "#74f2a0"; live.append(el("span", "dot ok pulse"), document.createTextNode("Running"));
+      const kind = String(m.id || "").startsWith("supervised.") ? "Supervised" : "Mission";
+      // Steps can run side by side, so: how many are done. Offline, the clock stops when the Mac was last heard from.
+      const asOf = stale && lastStatusAt ? lastStatusAt : Date.now();
+      const txt = el("div", "grow"); txt.append(el("b", "", m.goal || "Mission"), el("span", "sub small", `${kind} · ${steps.length ? `${finished} of ${steps.length} done` : "starting"} · ${dur(asOf - (m.createdAt || asOf))}`));
+      const live = el("span", "small row-i");
+      if (stale) { live.style.color = "#ffb35c"; live.append(el("span", "dot"), document.createTextNode("Last seen running")); }
+      else { live.style.color = "#74f2a0"; live.append(el("span", "dot ok pulse"), document.createTextNode("Running")); }
       top.append(txt, live); card.appendChild(top);
       if (steps.length) {
         const list = el("div", "steps");
-        for (const s of steps.slice(0, 6)) { const r = el("div", `step ${s.status}`); r.append(el("i"), el("span", "clamp1", s.goal)); list.appendChild(r); }
+        for (const s of steps.slice(0, 6)) { const r = el("div", `step ${STEP_CLASS[s.status] || ""}`); r.append(el("i"), el("span", "clamp1", s.goal || "")); list.appendChild(r); }
+        if (steps.length > 6) list.appendChild(el("span", "sub tiny", `and ${steps.length - 6} more`));
         card.appendChild(list);
       }
       const btns = el("div", "btns2");
       const ask = el("button", "glass big-btn", "Ask about it");
-      ask.addEventListener("click", () => { show("chat"); input.value = `How is "${m.goal}" going?`; autosize(); setComposerMode(); input.focus(); });
+      ask.addEventListener("click", () => askMac(`How is "${m.goal}" going?`));
       const stop = el("button", `big-btn stop-btn${armed === m.id ? " armed" : ""}`, armed === m.id ? "Tap again to stop" : "Stop");
+      stop.disabled = stale;
       stop.addEventListener("click", async () => {
-        if (armed !== m.id) { armed = m.id; renderMissions(last); setTimeout(() => { if (armed === m.id) { armed = ""; renderMissions(last); } }, 3000); return; }
+        if (armed !== m.id) { armed = m.id; renderMissions(); setTimeout(() => { if (armed === m.id) { armed = ""; renderMissions(); } }, 3000); return; }
         armed = "";
-        try { const r = await api("/action", { json: { type: "stop-mission", missionId: m.id } }); toast(r.message || "Stopped", !r.ok); } catch (e) { toast(e.message, true); }
+        stop.setAttribute("aria-busy", "true");
+        try { const r = await api("/action", { json: { type: "stop-mission", missionId: m.id } }); toast(r.message || "Stopped", !r.ok); }
+        catch (e) { toast(e.status === 503 ? "Your Mac is offline." : e.message, true); }
+        pollStatus().catch(() => {}); // show the change now, not on the next poll
       });
       btns.append(ask, stop); card.appendChild(btns); box.appendChild(card);
     }
     if (done.length) {
       const list = el("section", "glass list");
       for (const m of done.slice(0, 10)) {
-        const r = el("div", "row"); const dot = el("span", "dot"); dot.style.background = m.status === "failed" ? "#ff6b6b" : "#3ee6b0";
-        const t = el("div", "grow"); t.append(el("span", "clamp1", m.goal), el("span", "sub tiny", `${m.status[0].toUpperCase()}${m.status.slice(1)} · ${ago(m.updatedAt)}`));
-        r.append(dot, t); list.appendChild(r);
+        const [label, color] = MISSION_STATE[m.status] || [cap(m.status) || "Ended", "#8fa3aa"];
+        const r = el("button", "row"); const dot = el("span", "dot"); dot.style.background = color;
+        const t = el("div", "grow"); t.append(el("span", "clamp1", m.goal || "Mission"), el("span", "sub tiny", `${label} · ${ago(m.updatedAt || m.createdAt || Date.now())}`));
+        r.append(dot, t);
+        r.addEventListener("click", () => askMac(`What happened with "${m.goal}"?`));
+        list.appendChild(r);
       }
       box.appendChild(list);
     }
-    const ag = $("seg-agents"); clear(ag);
-    const agents = d.agents || [];
+    const agents = Array.isArray(d.agents) ? d.agents : [];
+    const projects0 = Array.isArray(d.projects) ? d.projects : [];
+    segCounts({ missions: running.length, agents: agents.filter((a) => /work|run/.test(String(a.status || ""))).length, projects: projects0.filter((p) => p.question).length });
     const al = el("section", "glass list");
     if (!agents.length) al.appendChild(el("p", "sub empty", "No agents are working right now."));
     for (const a of agents) {
-      const r = el("div", "row"); const av = el("span", "glass avatar-sq", (a.name || "?").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "AG");
-      const t = el("div", "grow"); t.append(el("span", "clamp1", a.name), el("span", "sub tiny clamp1", a.progress || a.goal));
-      const s = el("span", "small", a.status === "working" || a.status === "running" ? "Working" : a.status); s.style.color = /work|run/.test(a.status) ? "#74f2a0" : "";
-      r.append(av, t, s); al.appendChild(r);
+      const r = el("div", "row"); const av = el("span", "glass avatar-sq", String(a.name || "?").replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).map((w) => w[0] || "").join("").slice(0, 2).toUpperCase() || "AG");
+      const t = el("div", "grow"); t.append(el("span", "clamp1", a.name || "Agent"), el("span", "sub tiny clamp1", a.progress || a.goal || ""));
+      const working = /work|run/.test(String(a.status || ""));
+      const st = el("span", "small", working ? (stale ? "Last seen working" : "Working") : cap(a.status)); st.style.color = working ? (stale ? "#ffb35c" : "#74f2a0") : "";
+      r.append(av, t, st); al.appendChild(r);
     }
     ag.appendChild(al);
-    const pj = $("seg-projects"); clear(pj);
+    const projects = Array.isArray(d.projects) ? d.projects : [];
     const pl = el("section", "glass list");
-    const colors = { completed: "#3ee6b0", implementing: "#5ee7f5", building: "#5ee7f5", verifying: "#5ee7f5" };
-    if (!(d.projects || []).length) pl.appendChild(el("p", "sub empty", "No projects yet."));
-    for (const p of d.projects || []) {
-      const r = el("button", "row"); const t = el("div", "grow"); t.append(el("span", "clamp1", p.name), el("span", "sub tiny", `rev ${p.revision} · ${p.criteria} criteria · ${new Date(p.updatedAt).toLocaleDateString([], { month: "short", day: "numeric" })}`));
-      const tag = el("span", "tag", p.phase[0].toUpperCase() + p.phase.slice(1)); tag.style.color = colors[p.phase] || "#ffb35c";
+    if (!projects.length) pl.appendChild(el("p", "sub empty", "No projects yet."));
+    for (const p of projects) {
+      const [label, color] = PHASE[p.phase] || [cap(p.phase) || "Project", "#ffb35c"];
+      const r = el("button", "row"); const t = el("div", "grow");
+      t.append(el("span", "clamp1", p.name || "Project"), el("span", "sub tiny", `rev ${p.revision ?? 0} · ${p.criteria ?? 0} criteria · ${p.updatedAt ? new Date(p.updatedAt).toLocaleDateString([], { month: "short", day: "numeric" }) : ""}`));
+      if (p.question) t.appendChild(el("span", "small clamp2 proj-q", `Echo asks: ${p.question}`));
+      const tag = el("span", "tag", label); tag.style.color = color;
       r.append(t, tag);
-      r.addEventListener("click", () => { show("chat"); input.value = p.phase === "completed" ? `Run the checks for the project "${p.name}".` : `Continue building the project "${p.name}".`; autosize(); setComposerMode(); input.focus(); });
+      r.addEventListener("click", () => askMac(p.question ? `About the project "${p.name}": ` : p.phase === "completed" ? `Run the checks for the project "${p.name}".` : `Continue building the project "${p.name}".`));
       pl.appendChild(r);
     }
     pj.appendChild(pl);
@@ -2739,10 +2805,14 @@
     list.appendChild(head);
     if (!handoffItems.length) list.appendChild(el("p", "sub small empty-line", "Leave a job here and your Mac does it the next time Echo is on."));
     for (const it of handoffItems.slice(0, 8)) {
-      const [label, color] = HO_STATE[it.status] || [it.status, "#8fa3aa"];
+      let [label, color] = HO_STATE[it.status] || [it.status, "#8fa3aa"];
+      // Started, then no word from the Mac for half an hour: say so rather than "Working" forever.
+      const quiet = it.status === "started" && Date.now() - (it.updatedAt || 0) > 30 * 60_000;
+      if (quiet) { label = "No news"; color = "#ffb35c"; }
       const row = el("div", "row ho-row");
       const t = el("div", "grow");
-      t.append(el("span", "clamp2", it.text), el("span", "sub tiny", it.summary || `${label} · ${ago(it.updatedAt)}`));
+      t.append(el("span", "clamp2", it.text), el("span", "sub tiny", `${quiet ? "Started, no word from your Mac since" : label} · ${ago(it.updatedAt || it.createdAt || Date.now())}`));
+      if (it.summary) t.appendChild(el("span", "small clamp2 ho-summary", it.summary));
       const tag = el("span", "tag", label); tag.style.color = color;
       row.append(t, tag);
       if (it.status === "waiting") {

@@ -569,3 +569,13 @@ body.kb .br-panel { margin-bottom: 8px; }
 .mac-state .dot { margin-top: 7px; }
 .mac-state .grow > * { display: block; }
 .mac-state b { font-size: 16px; margin-bottom: 2px; }
+
+/* ---------- Missions: offline, partly done, questions ---------- */
+.mission.stale { opacity: .78; }
+.step.partial i { border-color: var(--amber); background: rgba(255, 179, 92, .25); }
+.stop-btn:disabled { opacity: .4; }
+.mac-note { padding: 0 6px; }
+.proj-q { color: var(--amber); margin-top: 2px; }
+.ho-summary { color: var(--text); opacity: .85; margin-top: 2px; }
+#seg-missions, #seg-agents, #seg-projects, #handoff-box { display: flex; flex-direction: column; gap: 12px; }
+#seg-missions[hidden], #seg-agents[hidden], #seg-projects[hidden], #handoff-box[hidden] { display: none; }
