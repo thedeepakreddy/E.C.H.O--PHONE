@@ -44,12 +44,11 @@ Separately, it fetches the World page from [Osiris](https://osirisai.live), plus
    3. Restart Echo. `/healthz` now says `"echo":"online"`.
 
 5. **Install it on your iPhone.**
-   1. Send **/link** to Echo on Telegram.
-   2. Open the link in **Safari** and sign in with your remote password.
-   3. Tap **Share → Add to Home Screen**.
-   4. Open **Echo** from the Home Screen, then turn on **Settings → Unlock with Face ID**.
+   1. Open the app's address in **Safari** (or Chrome) and tap **Share → Add to Home Screen**.
+   2. Open **Echo** from the Home Screen and tap **Get started**.
+   3. Go to **Settings → Your Mac**: ask Echo on the Mac to *show the phone remote link* and tap **Scan the QR code** (or paste the link from Telegram's **/link**), then sign in with your remote password, or turn on **Unlock with Face ID**.
 
-**Connecting the Mac later, or another Mac:** ask Echo on the Mac to *show the phone remote link* and tap **Scan the QR code** in the app (on the first screen, or **Settings → Connect your Mac**). The camera reads the QR; or paste the link from Telegram's **/link**. Only links for this app's own address are accepted. The QR reader is [jsQR](https://github.com/cozmo/jsQR) (Apache 2.0), served from `public/vendor`.
+The first screen is only **Get started**; everything about the Mac lives in **Settings → Your Mac**. Phone mode needs the phone to have signed in to the Mac once: that gives it a pass for 30 days, renewed whenever the Mac is online. Only links for this app's own address are accepted. The QR reader is [jsQR](https://github.com/cozmo/jsQR) (Apache 2.0), served from `public/vendor`.
 
 The link carries a private token. Treat it like a key, and don't post it anywhere.
 

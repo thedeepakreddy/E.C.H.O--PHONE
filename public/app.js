@@ -140,7 +140,8 @@
     if (view === "home" && window.echoCore) window.echoCore.replay(); // the figure assembles every time
     if (view === "chat") { unread = 0; renderBadge(); setTimeout(scrollMessages, 30); pollChat(); }
     if (view === "world") loadWorld();
-    if (view === "settings") loadPhoneCal();
+    if (view === "settings") { loadPhoneCal(); renderMacPage(); }
+    if (view === "mac") renderMacPage();
     if (view === "browser") openBrowser();
     if (view === "screen") openScreen(); else closeScreen();
     if (view === "missions") { if (last) renderMissions(last); renderHandoffs(); loadHandoffs(); }
@@ -173,12 +174,41 @@
   };
   const faceIdAllowed = () => store.get("echo_faceid") !== "off" && !!window.PublicKeyCredential;
 
-  async function prepareSignIn() {
+  // ---------- the first screen, and Settings → Your Mac ----------
+  // The first screen is only "Get started". Everything about the Mac (its link
+  // or QR code, its password, Face ID) lives on the Your Mac page in Settings.
+  function showWelcome() {
     show("signin");
-    if (!T) { $("signin-form").hidden = true; $("no-link").hidden = false; $("use-phone").hidden = !passValid(); return; }
-    $("signin-form").hidden = false; $("no-link").hidden = true;
+    $("start-note").hidden = passValid() || !!(T && S);
+  }
+  $("get-started").addEventListener("click", () => {
+    if (T && S) { start(); enter(); refreshCloud(); return; }
+    if (passValid()) { if (mode !== "phone") { mode = "phone"; store.set("echo_mode", "phone"); } enter(); refreshCloud(); return; }
+    // A phone that has never signed in to the Mac: Phone mode needs that once.
+    prepareSignIn();
+    backTo.mac = "signin";
+  });
+  /** The Your Mac page: link it (scan or paste), sign in to it, or sign out. */
+  function prepareSignIn() {
+    if (currentView !== "mac") show("mac"); else renderMacPage();
+  }
+  function macSummary() {
+    if (!T) return { title: "Not connected", text: "Scan the QR code Echo shows on your Mac to link it.", short: "Not connected", on: false };
+    if (!S) return { title: "Linked · not signed in", text: macOnline ? "Echo is running on your Mac. Sign in with its password." : "Echo isn't running on your Mac right now. Start Echo on the Mac, then sign in.", short: "Sign in", on: false };
+    return { title: macOnline ? "Connected" : "Connected · Mac offline", text: macOnline ? "Echo on your Mac is online." : "Echo on your Mac is offline. Echo on your phone still works.", short: macOnline ? "Online" : "Offline", on: macOnline };
+  }
+  async function renderMacPage({ faceId = true } = {}) {
+    const m = macSummary();
+    $("set-mac").textContent = m.short;
+    if (currentView !== "mac") return;
+    $("mac-state-title").textContent = m.title;
+    $("mac-state-text").textContent = m.text;
+    $("mac-state-dot").className = `dot${m.on ? " ok" : ""}`;
+    $("no-link").hidden = !!T;
+    $("signin-form").hidden = !T || !!S;
+    $("mac-signed-in").hidden = !(T && S);
+    if (!T || S || !faceId) return;
     $("faceid-login").hidden = true; $("signin-or").hidden = true;
-    $("use-phone").hidden = !passValid();
     if (!faceIdAllowed()) return;
     try {
       const r = await fetch(u("/passkey/options?purpose=login"));
@@ -192,21 +222,24 @@
     start();
     enter();
     refreshCloud();
+    toast("Connected to your Mac");
   }
   /** Signed out of the Mac. `full` also forgets the cloud pass (Sign out of this phone). */
   function signedOut(message, { full = false } = {}) {
     S = ""; store.set("echo_s", null);
     stopPolling();
-    if (full) { PASS = ""; store.set("echo_pass", null); cloudInfo = null; }
-    if (!full && mode === "phone" && passValid()) {
-      macOnline = false; renderMode();
-      toast("Signed out of your Mac. Echo on your phone still works.");
+    if (full) { PASS = ""; store.set("echo_pass", null); cloudInfo = null; showWelcome(); if (message) toast(message); return; }
+    macOnline = false;
+    if (passValid()) {
+      if (mode !== "phone") { mode = "phone"; store.set("echo_mode", "phone"); }
+      renderMode(); renderMacPage();
+      toast(message || "Signed out of your Mac. Echo on your phone still works.");
       return;
     }
     prepareSignIn();
     if (message) $("signin-err").textContent = message;
   }
-  $("use-phone").addEventListener("click", () => { setMode("phone"); enter(); refreshCloud(); });
+  $("mac-signout").addEventListener("click", () => signedOut("Signed out of your Mac."));
   $("signin-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const pw = $("pw").value;
@@ -245,7 +278,7 @@
     closeScanner();
     if (changed && S) { S = ""; store.set("echo_s", null); stopPolling(); macOnline = false; }
     toast(changed ? "Mac link saved. Sign in with its password." : "That's the Mac you're connected to.");
-    if (changed || !S) prepareSignIn();
+    if (changed || !S) prepareSignIn(); else renderMacPage();
     return r;
   }
   $("link-form").addEventListener("submit", (e) => {
@@ -428,6 +461,7 @@
   function stateDot(color) { $("state-dot").style.background = color; $("state-dot").style.boxShadow = `0 0 12px ${color}`; }
   /** Everything that depends on where Echo runs, painted in one place. */
   function renderMode() {
+    renderMacPage({ faceId: false });
     const phone = mode === "phone";
     body.dataset.mode = mode;
     const h = new Date().getHours();
@@ -3029,7 +3063,7 @@
   setComposerMode();
   renderChat();
   if (T && S) { start(); enter(); }
-  else if (mode === "phone" && passValid()) enter();
-  else prepareSignIn();
+  else if (passValid()) { if (mode !== "phone") { mode = "phone"; store.set("echo_mode", "phone"); } enter(); }
+  else showWelcome();
   refreshCloud().then(() => { if (params.get("view") && currentView !== "signin") openFromUrl(location.href); });
 })();
