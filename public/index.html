@@ -53,17 +53,35 @@
       <button type="submit" class="bubble b40" aria-label="Unlock"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
     </div>
     <p id="signin-err" class="err" role="alert"></p>
+    <button type="button" class="text-btn center" data-scan>Scan a different QR code</button>
   </form>
   <button class="glass big-btn" id="use-phone" hidden>Use Echo on your phone</button>
   <div id="no-link" class="glass sheet-card notice" hidden>
-    <h2>Open your Echo link once</h2>
-    <p class="sub">This app needs the private link from your Mac. Send <b>/link</b> to Echo on Telegram, then paste it here.</p>
-    <form id="link-form" class="glass field" autocomplete="off">
+    <h2>Connect your Mac</h2>
+    <p class="sub">Ask Echo on your Mac to <b>show the phone remote link</b> and scan its QR code. Or send <b>/link</b> to Echo on Telegram and paste the link.</p>
+    <button type="button" class="cta big-btn" data-scan><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3"/><path d="M8 9h3v3H8zM13 13h3v3h-3zM13 9h3M8 15h3"/></svg>Scan the QR code</button>
+    <form id="link-form" class="glass field" autocomplete="off" novalidate>
       <label for="link-in" class="sr">Your Echo link</label>
       <input id="link-in" type="url" inputmode="url" placeholder="Paste your Echo link" enterkeyhint="go" autocapitalize="off" spellcheck="false">
       <button type="submit" class="bubble b40" aria-label="Use this link"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
     </form>
     <p id="link-err" class="err" role="alert"></p>
+  </div>
+</section>
+
+<!-- ============ SCAN THE MAC'S QR CODE ============ -->
+<section class="scanner" id="scanner" role="dialog" aria-modal="true" aria-label="Scan the QR code" hidden>
+  <video id="scan-video" playsinline muted autoplay></video>
+  <div class="scan-frame" aria-hidden="true"></div>
+  <header class="scan-top"><button type="button" class="glass pill back" id="scan-close">Cancel</button></header>
+  <div class="scan-bottom">
+    <p class="scan-hint" id="scan-hint">Point at the QR code Echo shows on your Mac</p>
+    <p class="err" id="scan-err" role="alert"></p>
+    <form id="scan-paste" class="glass field" autocomplete="off" novalidate>
+      <label for="scan-link" class="sr">Or paste your Echo link</label>
+      <input id="scan-link" type="url" inputmode="url" placeholder="Or paste the link from Telegram" enterkeyhint="go" autocapitalize="off" spellcheck="false">
+      <button type="submit" class="bubble b40" aria-label="Use this link"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    </form>
   </div>
 </section>
 
@@ -225,6 +243,7 @@
     </div>
     <p class="group-title">This phone</p>
     <div class="glass list">
+      <button class="row" data-scan><span class="grow">Connect your Mac</span><span class="sub small">Scan its QR code</span><span class="chev" aria-hidden="true"></span></button>
       <button class="row" role="switch" aria-checked="false" id="sw-faceid"><span class="grow">Unlock with Face ID</span><span class="track"><span class="knob"></span></span></button>
     </div>
     <p class="group-title">Phone mode</p>

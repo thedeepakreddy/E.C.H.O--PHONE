@@ -175,7 +175,7 @@
 
   async function prepareSignIn() {
     show("signin");
-    if (!T) { $("signin-form").hidden = true; $("no-link").hidden = false; return; }
+    if (!T) { $("signin-form").hidden = true; $("no-link").hidden = false; $("use-phone").hidden = !passValid(); return; }
     $("signin-form").hidden = false; $("no-link").hidden = true;
     $("faceid-login").hidden = true; $("signin-or").hidden = true;
     $("use-phone").hidden = !passValid();
@@ -219,17 +219,105 @@
     } catch { $("signin-err").textContent = "No connection."; }
   });
   $("pw").addEventListener("input", () => ($("signin-err").textContent = ""));
-  // A Home Screen app opened without its link (added from the bare address, or
-  // its storage cleared): take the link pasted from Telegram instead.
+  // ---------- connecting the Mac: its link, scanned or pasted ----------
+  // Echo on the Mac shows its phone app link as a QR code ("show me the phone
+  // remote link"), and Telegram's /link sends the same link. Only its key (the
+  // 32 hex characters after t=) is kept on this phone; the Mac password comes next.
+  /** The key from an Echo link, or an error message. */
+  function linkKey(raw) {
+    const text = String(raw || "").trim();
+    let m = text.match(/^([0-9a-f]{32})$/i);
+    if (!m) {
+      try {
+        const url = new URL(text);
+        if (url.host !== location.host) return { error: `That link is for ${url.host}, not this Echo app.` };
+        m = (url.searchParams.get("t") || "").match(/^([0-9a-f]{32})$/i);
+      } catch { m = text.match(/[?&]t=([0-9a-f]{32})\b/i); }
+    }
+    return m ? { key: m[1].toLowerCase() } : { error: "That isn't your Echo link. Ask Echo to show the phone remote link, or send /link on Telegram." };
+  }
+  /** Use a Mac's link: keep its key and go to its password. Returns whether it worked. */
+  function useLink(raw) {
+    const r = linkKey(raw);
+    if (r.error) return r;
+    const changed = r.key !== T;
+    T = r.key; store.set("echo_t", T);
+    closeScanner();
+    if (changed && S) { S = ""; store.set("echo_s", null); stopPolling(); macOnline = false; }
+    toast(changed ? "Mac link saved. Sign in with its password." : "That's the Mac you're connected to.");
+    if (changed || !S) prepareSignIn();
+    return r;
+  }
   $("link-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    const raw = $("link-in").value.trim();
-    const m = raw.match(/[?&]t=([0-9a-f]{32})\b/i) || raw.match(/^([0-9a-f]{32})$/i);
-    if (!m) { $("link-err").textContent = "That doesn't look like your Echo link. Send /link to Echo on Telegram and copy the whole link."; return; }
-    T = m[1].toLowerCase(); store.set("echo_t", T);
-    $("link-in").value = ""; $("link-err").textContent = "";
-    prepareSignIn();
+    const r = useLink($("link-in").value);
+    $("link-err").textContent = r.error || "";
+    if (!r.error) $("link-in").value = "";
   });
+  $("scan-paste").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const r = useLink($("scan-link").value);
+    $("scan-err").textContent = r.error || "";
+    if (!r.error) $("scan-link").value = "";
+  });
+  let scan = null;
+  function loadQrReader() {
+    if (window.jsQR) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const el2 = document.createElement("script");
+      el2.src = "/vendor/jsqr.js";
+      el2.onload = () => (window.jsQR ? resolve() : reject(new Error("The QR reader didn't load.")));
+      el2.onerror = () => reject(new Error("The QR reader didn't load. Check your connection."));
+      document.head.appendChild(el2);
+    });
+  }
+  async function openScanner() {
+    closeSheets();
+    $("scanner").hidden = false;
+    $("scan-err").textContent = "";
+    $("scan-hint").textContent = "Point at the QR code Echo shows on your Mac";
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("This browser can't use the camera here. Paste the link below instead.");
+      const [stream] = await Promise.all([navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false }), loadQrReader()]);
+      if ($("scanner").hidden) { stream.getTracks().forEach((t) => t.stop()); return; }
+      const video = $("scan-video");
+      video.srcObject = stream;
+      await video.play().catch(() => {});
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      scan = { stream, timer: 0, lastBad: "" };
+      const tick = () => {
+        if (!scan) return;
+        if (video.videoWidth) {
+          const k = Math.min(1, 720 / Math.max(video.videoWidth, video.videoHeight));
+          canvas.width = Math.round(video.videoWidth * k);
+          canvas.height = Math.round(video.videoHeight * k);
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
+          if (code && code.data) {
+            const r = useLink(code.data);
+            if (!r.error) return;
+            // Some other QR code: say why once, and keep looking.
+            if (code.data !== scan.lastBad) { scan.lastBad = code.data; $("scan-err").textContent = r.error; }
+          }
+        }
+        scan.timer = setTimeout(tick, 160);
+      };
+      tick();
+    } catch (e) {
+      $("scan-err").textContent = e && e.name === "NotAllowedError"
+        ? "Camera access is off for this app. Turn it on in the iPhone's Settings, or paste the link below."
+        : (e && e.message) || "The camera didn't start. Paste the link below instead.";
+    }
+  }
+  function closeScanner() {
+    if (scan) { clearTimeout(scan.timer); scan.stream.getTracks().forEach((t) => t.stop()); scan = null; }
+    $("scan-video").srcObject = null;
+    $("scanner").hidden = true;
+  }
+  $("scan-close").addEventListener("click", closeScanner);
+  document.addEventListener("click", (e) => { if (e.target.closest("[data-scan]")) openScanner(); });
   $("faceid-login").addEventListener("click", async () => {
     try {
       const o = await fetch(u("/passkey/options?purpose=login")).then((r) => r.json());

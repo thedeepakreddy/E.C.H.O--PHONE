@@ -49,6 +49,8 @@ Separately, it fetches the World page from [Osiris](https://osirisai.live), plus
    3. Tap **Share → Add to Home Screen**.
    4. Open **Echo** from the Home Screen, then turn on **Settings → Unlock with Face ID**.
 
+**Connecting the Mac later, or another Mac:** ask Echo on the Mac to *show the phone remote link* and tap **Scan the QR code** in the app (on the first screen, or **Settings → Connect your Mac**). The camera reads the QR; or paste the link from Telegram's **/link**. Only links for this app's own address are accepted. The QR reader is [jsQR](https://github.com/cozmo/jsQR) (Apache 2.0), served from `public/vendor`.
+
 The link carries a private token. Treat it like a key, and don't post it anywhere.
 
 ## What's in the app
