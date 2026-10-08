@@ -19,7 +19,9 @@
   --safe-top: max(env(safe-area-inset-top), 20px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --tab-h: 68px;
-  --tab-gap: max(calc(env(safe-area-inset-bottom) - 12px), 12px);
+  /* Keep the floating bar close to the bottom; its own inset protects labels
+     and touch targets above the iPhone home indicator. */
+  --tab-gap: max(calc(var(--safe-bottom) - 24px), 4px);
   --kb: 0px;
   color-scheme: dark;
   -webkit-text-size-adjust: 100%;
