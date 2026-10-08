@@ -217,6 +217,91 @@ async function startRelay(opts) {
   return { relay, base, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) };
 }
 
+test("standalone phone: start, chat, save and renew without any Mac", async () => {
+  let t = NOW;
+  const r = await startRelay({ now: () => t, gemini: scripted([text("Hello from your phone!")]) });
+  const session = (pass, body = {}) => fetch(`${r.base}/phone/session`, {
+    method: "POST", headers: { "content-type": "application/json", ...(pass ? { "x-echo-pass": pass } : {}) }, body: JSON.stringify(body),
+  });
+  try {
+    const first = await session(null, { device: DEVICE });
+    assert.equal(first.status, 200);
+    const { device, cloudPass } = await first.json();
+    assert.match(device, /^[0-9a-f]{32}$/);
+    assert.notEqual(device, DEVICE, "a client cannot choose another phone's identity");
+    assert.equal(verifyPass(r.relay.keys.pass, cloudPass, { now: t }).phoneOnly, true);
+    const headers = { "x-echo-pass": cloudPass, "content-type": "application/json" };
+    const chat = await fetch(`${r.base}/cloud/chat`, { method: "POST", headers, body: JSON.stringify({ text: "hi" }) });
+    assert.equal(chat.status, 200);
+    assert.equal((await chat.json()).reply, "Hello from your phone!");
+    const saved = await fetch(`${r.base}/cloud/memory/save`, { method: "POST", headers, body: JSON.stringify({ note: { title: "My note", text: "Dentist next week" } }) });
+    assert.equal(saved.status, 200);
+    const id = (await saved.json()).item.id;
+    t += 31 * 86400_000;
+    assert.equal((await fetch(`${r.base}/cloud/status`, { headers })).status, 401, "expired passes cannot call ordinary APIs");
+    const renewed = await session(cloudPass);
+    assert.equal(renewed.status, 200);
+    const next = await renewed.json();
+    assert.equal(next.device, device, "renewal preserves saved data without Mac sign-in");
+    const restored = await fetch(`${r.base}/cloud/memory?id=${id}`, { headers: { "x-echo-pass": next.cloudPass } });
+    assert.equal(restored.status, 200);
+    assert.equal((await restored.json()).body.text, "Dentist next week");
+    const stranger = await (await session(null, { device })).json();
+    assert.notEqual(stranger.device, device);
+    assert.equal((await fetch(`${r.base}/cloud/memory?id=${id}`, { headers: { "x-echo-pass": stranger.cloudPass } })).status, 404);
+    assert.equal((await session(cloudPass + "x")).status, 401, "a forged pass cannot restore an identity");
+    assert.equal((await fetch(`${r.base}/phone/session`, { method: "POST", headers: { "content-type": "application/json", origin: "https://another-site.example" }, body: "{}" })).status, 403);
+    assert.equal((await fetch(`${r.base}/phone/session`, { method: "POST", body: "{}" })).status, 403, "cross-site forms cannot start sessions");
+  } finally { await r.close(); }
+});
+
+test("standalone phones cannot access Mac data or revoke paired phones; pairing keeps their data", async () => {
+  const store = createStore({ key: deriveKeys(SECRET).store, now: () => NOW });
+  const r = await startRelay({ store, now: () => NOW, fetchJson: async () => ({}) });
+  try {
+    const start = await fetch(`${r.base}/phone/session`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    const { device, cloudPass } = await start.json();
+    const headers = { "x-echo-pass": cloudPass, "content-type": "application/json" };
+    const agent = { authorization: `Bearer ${SECRET}`, "content-type": "application/json", "x-echo-pass-gen": "2" };
+    await fetch(`${r.base}/agent/digest`, { method: "POST", headers: agent, body: JSON.stringify({ calendar: [], email: [{ from: "Private sender", subject: "Mac inbox only" }], missions: [] }) });
+    await fetch(`${r.base}/agent/poll`, { headers: agent });
+    const briefing = async (h) => (await (await fetch(`${r.base}/cloud/briefing/now`, { method: "POST", headers: h, body: "{}" })).json()).briefing;
+    const alone = await briefing(headers);
+    assert.equal(alone.email, undefined);
+    assert.equal(alone.macAsOf, undefined);
+    assert.equal(alone.macOnline, false);
+    // The scheduled morning briefing must filter the digest too, not just the preview.
+    const phones = await store.get("phones");
+    phones.devices[device].prefs = { ...phones.devices[device].prefs, on: true, time: "10:00" };
+    phones.devices[device].sub = { endpoint: "https://web.push.apple.com/test", keys: { p256dh: "bad", auth: "bad" } };
+    await store.set("phones", phones);
+    await r.relay.tick();
+    assert.equal((await store.get(`brief:${device}`)).email, undefined);
+    assert.equal((await store.get(`brief:${device}`)).macOnline, false);
+    assert.equal((await fetch(`${r.base}/cloud/status`, { headers })).status, 200, "Mac-wide revocation leaves standalone sessions alone");
+    assert.equal((await fetch(`${r.base}/cloud/signout-all`, { method: "POST", headers })).status, 403);
+    assert.equal(r.relay.state().passGen, 2);
+    assert.equal((await fetch(`${r.base}/cloud/handoff`, { method: "POST", headers, body: "{}" })).status, 403);
+    const browse = await fetch(`${r.base}/cloud/browse/session`, { method: "POST", headers, body: "{}" });
+    assert.equal(browse.status, 200);
+    assert.equal(unseal(r.relay.keys.store, /eb=([^;]+)/.exec(browse.headers.get("set-cookie"))[1]).phoneOnly, true);
+    const reminder = await fetch(`${r.base}/cloud/reminders`, { method: "POST", headers, body: JSON.stringify({ text: "My reminder", when: new Date(NOW + 3600_000).toISOString().slice(0, 16), tz: "UTC" }) });
+    assert.equal(reminder.status, 200);
+    // Echo Mac issues its ordinary pass for the same id at optional sign-in.
+    const paired = signPass(r.relay.keys.pass, { device, gen: 2, now: NOW });
+    const pairedHeaders = { ...headers, "x-echo-pass": paired };
+    assert.equal((await fetch(`${r.base}/cloud/status`, { headers: pairedHeaders })).status, 200);
+    assert.equal((await briefing(pairedHeaders)).email[0].subject, "Mac inbox only");
+    const reminders = await (await fetch(`${r.base}/cloud/reminders`, { headers: pairedHeaders })).json();
+    assert.equal(reminders.reminders[0].text, "My reminder");
+    await fetch(`${r.base}/agent/poll`, { headers: { ...agent, "x-echo-pass-gen": "3" } });
+    assert.equal((await fetch(`${r.base}/cloud/status`, { headers: pairedHeaders })).status, 401);
+    const cookie = browse.headers.get("set-cookie").split(";")[0];
+    assert.equal((await fetch(`${r.base}/b/go?q=Budapest`, { headers: { cookie }, redirect: "manual" })).status, 302, "standalone Browser remains usable after Mac sign-out");
+    assert.equal((await fetch(`${r.base}/phone/session`, { method: "POST", headers: pairedHeaders, body: "{}" })).status, 401, "a revoked paired pass cannot recover its identity through standalone renewal");
+  } finally { await r.close(); }
+});
+
 test("relay: Phone mode needs a current cloud pass; Echo's sign-out reaches it", async () => {
   const r = await startRelay({ gemini: scripted([text("Hi there!"), text("again")]) });
   try {

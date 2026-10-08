@@ -1,6 +1,6 @@
 # Echo Remote
 
-Echo's phone app, and the small relay that connects it to Echo on your Mac from any network, on Wi-Fi or mobile data.
+Echo's standalone phone assistant, with an optional relay connection to Echo on your Mac over Wi-Fi or mobile data.
 
 ```
 iPhone (Home Screen app) ──https──▶ echo-remote on Render ◀──https long-poll── Echo on your Mac
@@ -8,7 +8,7 @@ iPhone (Home Screen app) ──https──▶ echo-remote on Render ◀──htt
 
 Your Mac never opens a port. Echo keeps a few outgoing requests open to the relay. The relay hands each phone request to Echo, and Echo answers it.
 
-The relay checks nothing about you and stores nothing about you. The link token, your password, the sessions and Face ID are all verified by Echo on the Mac. The relay is only a mailbox:
+Mac control requires pairing: the link token, password, Mac sessions and Face ID are verified by Echo on the Mac. For that connection, the relay is a mailbox:
 
 - It holds a phone request until Echo collects it.
 - It caps password guessing per address.
@@ -24,7 +24,7 @@ Separately, it fetches the World page from [Osiris](https://osirisai.live), plus
    openssl rand -hex 32
    ```
 
-   Keep the output handy. It's the password between the relay and Echo.
+   Keep the output handy. This server secret signs phone sessions and encrypts stored data. If you connect Echo Mac, it also authenticates the relay connection. No Mac is required to deploy or use Phone mode.
 
 2. **Push this folder to GitHub.** Use a private repo if you like; Render can read either.
 
@@ -33,7 +33,7 @@ Separately, it fetches the World page from [Osiris](https://osirisai.live), plus
    2. Under the service's **Environment**, add `RELAY_SECRET` with the secret from step 1.
    3. Wait for the deploy to finish. Opening `https://<your-service>.onrender.com/healthz` should show `{"ok":true,"echo":"offline"}`. Until the secret is set, it shows `"unpaired"`.
 
-4. **Tell Echo about it**, on the Mac:
+4. **Optional: connect Echo on your Mac.** Skip this for standalone Phone mode.
    1. In Echo's **API keys**, set **Echo phone app** to the same secret.
    2. In `~/.jarvis/config.json`, set:
 
@@ -46,9 +46,9 @@ Separately, it fetches the World page from [Osiris](https://osirisai.live), plus
 5. **Install it on your iPhone.**
    1. Open the app's address in **Safari** (or Chrome) and tap **Share → Add to Home Screen**.
    2. Open **Echo** from the Home Screen and tap **Get started**.
-   3. Go to **Settings → Your Mac**: ask Echo on the Mac to *show the phone remote link* and tap **Scan the QR code** (or paste the link from Telegram's **/link**), then sign in with your remote password, or turn on **Unlock with Face ID**.
+   3. **Optional:** go to **Settings → Your Mac**: ask Echo on the Mac to *show the phone remote link* and tap **Scan the QR code** (or paste the link from Telegram's **/link**), then sign in with your remote password, or turn on **Unlock with Face ID**.
 
-The first screen is only **Get started**; everything about the Mac lives in **Settings → Your Mac**. Phone mode needs the phone to have signed in to the Mac once: that gives it a pass for 30 days, renewed whenever the Mac is online. Only links for this app's own address are accepted. The QR reader is [jsQR](https://github.com/cozmo/jsQR) (Apache 2.0), served from `public/vendor`.
+The first screen is only **Get started**; everything about the Mac lives in **Settings → Your Mac**. Get started opens Phone mode directly, with a server-issued session that renews without a Mac. Pairing is optional and lives under Settings → Your Mac. Only links for this app's own address are accepted. The QR reader is [jsQR](https://github.com/cozmo/jsQR) (Apache 2.0), served from `public/vendor`.
 
 The link carries a private token. Treat it like a key, and don't post it anywhere.
 
@@ -70,7 +70,7 @@ Tap the pill at the top right of the Echo page to choose where Echo runs:
 - **Mac:** Echo on your Mac, as above.
 - **Phone:** Echo in the cloud, on this relay with Gemini. It answers, searches the web, checks weather and world events, and offers buttons you tap: add to calendar, remind me, run a Shortcut, open a link, or send a job to the Mac. It keeps working while the Mac is off. It can't reach the Mac itself.
 
-**How it's protected.** The Mac signs a cloud pass for the phone when you sign in. The pass is valid for 30 days and renews while the Mac is reachable. *Sign out every phone* cancels every pass, from either the Mac or the phone. Everything the relay stores is encrypted with a key derived from `RELAY_SECRET`.
+**How it's protected.** Get started creates a random phone identity and a signed session, valid for 30 days and renewed by this server. The signed session is needed to restore that identity; supplying a device id cannot access another phone's saved data. Standalone sessions cannot read the Mac's digest, submit Mac jobs, or sign out its paired phones. Optional Mac sign-in adds a paired pass for the same identity, keeping saved data intact. *Sign out every phone* cancels the Mac's paired passes; unrelated standalone users stay signed in. Everything the server stores is encrypted with a key derived from `RELAY_SECRET`. Phone sessions are stored on this browser; clearing browser storage loses access to that identity.
 
 **Messages sync.** Phone mode's messages are copied into the Mac's chat when it's back, never twice.
 

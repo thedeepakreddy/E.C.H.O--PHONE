@@ -7,7 +7,7 @@
  * router setting. A phone request is parked here until Echo collects it, and
  * Echo's answer is handed back.
  *
- * This server decides nothing. The password, sessions, lockouts, approvals and
+ * Mac passwords, sessions, lockouts, approvals and
  * every safety check stay on the Mac, which sees each request as if the phone
  * had asked it directly. What the relay does enforce: only the Echo holding
  * RELAY_SECRET may collect requests, and no one may flood the queue.
@@ -23,9 +23,9 @@
  *   GEMINI_EMBED_MODEL         search by meaning in saved memory (default gemini-embedding-001)
  *   GEMINI_BROWSE_MODEL        Echo's browsing, comma-separated in order (default: the two best Flash models the key can use)
  *
- * Phone mode is reached with a cloud pass that Echo on the Mac signs at sign-in
- * (lib/secure.js), so the relay can trust it while the Mac is off. It can never
- * reach the Mac: everything that touches the Mac still goes through the Mac.
+ * Get started issues a standalone Phone session (lib/secure.js), with no Mac
+ * required. Optional Mac sign-in adds a paired pass for the same phone id.
+ * Everything that touches the Mac still goes through its own authentication.
  *
  * Node's standard library only, no dependencies.
  */
@@ -35,7 +35,7 @@ import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deriveKeys, verifyPass, seal, unseal } from "./lib/secure.js";
+import { deriveKeys, signPass, verifyPass, seal, unseal } from "./lib/secure.js";
 import { createStore } from "./lib/store.js";
 import { createGemini, pickBrowseModels } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
@@ -187,7 +187,7 @@ export function createRelay({
   function tick() {
     ticking ??= withPhones((phones) => runTick({
       phones, now: now(), tools: briefingTools, macOnline: online(), push,
-      digest: () => store.get("digest").catch(() => null),
+      digest: (id, dev) => dev.phoneOnly ? null : store.get("digest").catch(() => null),
       storeBriefing: (id, b) => store.set(`brief:${id}`, b, 3 * 86400),
       phoneCalendar: (id) => store.get(`cal:${id}`).catch(() => null),
     })).catch(() => false).finally(() => { ticking = null; });
@@ -520,6 +520,30 @@ export function createRelay({
 
   // ---- Phone mode ----------------------------------------------------------
 
+  /** Start without a Mac. Only possession of a signed pass can restore an existing device. */
+  async function phoneSession(req, res) {
+    if (req.method !== "POST") return send(res, 405, { message: "Use Get started to open Echo." });
+    if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] ?? "")) || req.headers["sec-fetch-site"] === "cross-site") {
+      return send(res, 403, { message: "Open Echo to get started." });
+    }
+    if (req.headers.origin && req.headers.origin !== `https://${req.headers.host}` && req.headers.origin !== `http://${req.headers.host}`) {
+      return send(res, 403, { message: "Open Echo to get started." });
+    }
+    if (rateLimited(`start:${clientIp(req)}`)) return send(res, 429, { message: "Too many starts this minute. Try again shortly." });
+    try {
+      await readJson(req, 1024);
+      await passGenLoaded;
+      const previous = req.headers["x-echo-pass"];
+      const claims = previous ? verifyPass(keys.pass, previous, { minGen: passGen, now: now(), allowExpired: true }) : null;
+      if (previous && !claims) return send(res, 401, { error: "pass", message: "This phone session ended. Tap Get started again." });
+      const device = claims?.device ?? randomBytes(16).toString("hex");
+      // This endpoint never issues paired privileges, even when renewing an old Mac pass.
+      await withPhones((phones) => { deviceOf(phones, device).phoneOnly = true; });
+      const cloudPass = signPass(keys.pass, { device, gen: 0, now: now(), phoneOnly: true });
+      return send(res, 200, { device, cloudPass });
+    } catch (e) { return sendCloudError(res, e); }
+  }
+
   /** The cloud pass on this request, if it is genuine and current. */
   async function cloudClaims(req) {
     await passGenLoaded;
@@ -546,11 +570,16 @@ export function createRelay({
 
   async function cloudRoute(req, res, path) {
     const claims = await cloudClaims(req);
-    if (!claims) return send(res, 401, { error: "pass", message: "Sign in once with your Mac online to use Phone mode." });
+    if (!claims) return send(res, 401, { error: "pass", message: "This phone session ended. Tap Get started to continue." });
+    const macOnline = !claims.phoneOnly && online();
+    // Pairing later preserves this phone's saved data and enables the Mac digest.
+    if (!claims.phoneOnly && path === "/cloud/status") {
+      await withPhones((phones) => { deviceOf(phones, claims.device).phoneOnly = false; });
+    }
     if (path === "/cloud/status" && req.method === "GET") {
       return send(res, 200, {
         ready: Boolean(cloud), model: gemini?.model ?? null, store: store.remote ? "upstash" : "memory",
-        macOnline: online(), usage: cloud ? await cloud.usage().catch(() => null) : null, passExpires: claims.exp,
+        macOnline, usage: cloud ? await cloud.usage().catch(() => null) : null, passExpires: claims.exp,
       });
     }
     const device = claims.device;
@@ -589,7 +618,7 @@ export function createRelay({
       }
       if (path === "/cloud/handoff") {
         const items = await withHandoffs((st) => st.items.filter((i) => i.task.device === device).map(forPhone), { save: false });
-        return send(res, 200, { items: items.reverse().slice(0, 20), macOnline: online() });
+        return send(res, 200, { items: items.reverse().slice(0, 20), macOnline });
       }
       if (path === "/cloud/expenses") {
         const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
@@ -630,7 +659,7 @@ export function createRelay({
         }
         if (path === "/cloud/briefing/now") {
           const dev = await withPhones((phones) => { const d = deviceOf(phones, device); d.prefs = cleanPrefs(body.prefs ?? {}, d.prefs); return d; });
-          const b = await buildBriefing({ prefs: dev.prefs, dev, now: now(), tools: briefingTools, digest: await store.get("digest").catch(() => null), macOnline: online(), phoneCal: await store.get(`cal:${device}`).catch(() => null) });
+          const b = await buildBriefing({ prefs: dev.prefs, dev, now: now(), tools: briefingTools, digest: claims.phoneOnly ? null : await store.get("digest").catch(() => null), macOnline, phoneCal: await store.get(`cal:${device}`).catch(() => null) });
           await store.set(`brief:${device}`, b, 3 * 86400).catch(() => {});
           return send(res, 200, { briefing: b });
         }
@@ -663,6 +692,7 @@ export function createRelay({
       return send(res, 404, "Not found");
     }
     if (path === "/cloud/signout-all") {
+      if (claims.phoneOnly) return send(res, 403, { message: "Connect your Mac to manage its paired phones." });
       await raisePassGen(passGen + 1);
       return send(res, 200, { ok: true });
     }
@@ -693,7 +723,7 @@ export function createRelay({
       try {
         if (path === "/cloud/browse/session") {
           // The Browser's pages load in a frame, which can't send the cloud pass; a short-lived cookie for /b/ stands in for it.
-          const token = seal(keys.store, { d: device, exp: now() + BROWSE_SESSION_MS, g: passGen });
+          const token = seal(keys.store, { d: device, exp: now() + BROWSE_SESSION_MS, g: passGen, phoneOnly: claims.phoneOnly });
           const secure = Boolean(req.socket.encrypted) || String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim() === "https";
           return send(res, 200, { ok: true, until: now() + BROWSE_SESSION_MS }, {
             "set-cookie": `eb=${token}; Path=/b/; HttpOnly; SameSite=Strict; Max-Age=${BROWSE_SESSION_MS / 1000}${secure ? "; Secure" : ""}`,
@@ -768,6 +798,7 @@ export function createRelay({
       return send(res, 404, "Not found");
     }
     if (path === "/cloud/handoff" || path === "/cloud/handoff/cancel") {
+      if (claims.phoneOnly) return send(res, 403, { message: "Connect your Mac in Settings → Your Mac to send it jobs." });
       try {
         const body = await readJson(req, 64 * 1024);
         if (path === "/cloud/handoff/cancel") {
@@ -830,7 +861,7 @@ export function createRelay({
       if (rateLimited(claims.device)) return send(res, 429, { error: "busy", message: "Slow down a little — too many messages this minute." });
       try {
         const body = await readJson(req, path === "/cloud/voice" ? CLOUD_VOICE_BODY : CLOUD_BODY);
-        const context = { ...(body.context && typeof body.context === "object" ? body.context : {}), macOnline: online() };
+        const context = { ...(body.context && typeof body.context === "object" ? body.context : {}), macOnline };
         const mem = await memoryFor(device, context.tz).catch(() => null);
         let result;
         if (path === "/cloud/voice") {
@@ -853,7 +884,7 @@ export function createRelay({
     try {
       const c = unseal(keys.store, m[1]);
       await passGenLoaded;
-      return c && c.exp > now() && c.g >= passGen && typeof c.d === "string" ? c : null;
+      return c && c.exp > now() && (c.phoneOnly || c.g >= passGen) && typeof c.d === "string" ? c : null;
     } catch { return null; }
   }
   const sendPage = (res, status, html) => send(res, status, html, { ...PAGE_HEADERS, "content-type": "text/html; charset=utf-8" });
@@ -1019,6 +1050,7 @@ export function createRelay({
     const path = url.pathname;
     if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", app: APP_VERSION, phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
     if (path === "/version") return send(res, 200, { app: APP_VERSION });
+    if (path === "/phone/session") return void phoneSession(req, res);
     if (path === "/b/selftest" && req.method === "GET") return void browseSelfTest().then((r) => send(res, 200, r));
     if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
     if (path.startsWith("/b/")) return void browseRoute(req, res, url).catch(() => { if (!res.headersSent) sendPage(res, 502, notePage("Couldn't open that page", "Something went wrong. Try again.")); });

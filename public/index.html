@@ -24,7 +24,7 @@
 </div>
 
 <!-- ============ SIGN IN ============ -->
-<section id="v-signin" class="view signin" aria-label="Sign in">
+<section id="v-signin" class="view signin" aria-label="Welcome">
   <div class="signin-hero">
     <span class="reactor-glow" aria-hidden="true"></span>
     <!-- The HUD's reactor: rings cut from one render, each turning at its own rate. -->
@@ -39,10 +39,11 @@
   </div>
   <div class="signin-title">
     <h1>Echo</h1>
-    <p class="sub">Your assistant, on your phone and your Mac</p>
+    <p class="sub">Your assistant, on your phone</p>
   </div>
   <button class="cta big-btn" id="get-started">Get started</button>
-  <p class="sub small center" id="start-note" hidden>To turn on Echo on this phone, connect your Mac once.</p>
+  <p class="sub small center" id="start-note">Use Echo on your phone. Connect your Mac later, if you want.</p>
+  <p class="err center" id="start-error" role="alert"></p>
 </section>
 
 <!-- ============ YOUR MAC (pushed, from Settings) ============ -->
@@ -53,7 +54,7 @@
   <div class="scroll">
     <div class="glass card mac-state"><span class="dot" id="mac-state-dot"></span><div class="grow"><b id="mac-state-title">Not connected</b><span class="sub small" id="mac-state-text"></span></div></div>
     <div id="no-link" class="glass sheet-card notice" hidden>
-      <h2>Connect your Mac</h2>
+      <h2>Connect your Mac · optional</h2>
       <p class="sub">Ask Echo on your Mac to <b>show the phone remote link</b> and scan its QR code. Or send <b>/link</b> to Echo on Telegram and paste the link.</p>
       <button type="button" class="cta big-btn" data-scan><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3"/><path d="M8 9h3v3H8zM13 13h3v3h-3zM13 9h3M8 15h3"/></svg>Scan the QR code</button>
       <form id="link-form" class="glass field" autocomplete="off" novalidate>
@@ -105,7 +106,7 @@
   <div class="hero-fade" aria-hidden="true"></div>
   <header class="top">
     <div><p class="sub small" id="greeting">Hello</p><h1>Echo</h1></div>
-    <button class="glass pill" id="mac-pill" aria-label="Where Echo runs: tap to change"><span class="dot" id="mac-dot"></span><span id="mac-name">Your Mac</span></button>
+    <button class="glass pill" id="mac-pill" aria-label="Where Echo runs: tap to change"><span class="dot" id="mac-dot"></span><span id="mac-name">Phone</span></button>
   </header>
   <!-- The live humanoid from Echo's control panel, drawn by humanoid-core.js. -->
   <div class="hero-stage"><canvas id="core-canvas" role="img" aria-label="Echo, live"></canvas></div>
@@ -258,12 +259,12 @@
     </div>
     <p class="group-title">This phone</p>
     <div class="glass list">
-      <button class="row" data-open="mac"><span class="grow">Your Mac</span><span class="sub small" id="set-mac">Not connected</span><span class="chev" aria-hidden="true"></span></button>
+      <button class="row" data-open="mac"><span class="grow">Your Mac</span><span class="sub small" id="set-mac">Optional</span><span class="chev" aria-hidden="true"></span></button>
       <button class="row" role="switch" aria-checked="false" id="sw-faceid"><span class="grow">Unlock with Face ID</span><span class="track"><span class="knob"></span></span></button>
     </div>
     <p class="group-title">Phone mode</p>
     <div class="glass list">
-      <button class="row" id="set-mode-row"><span class="grow">Where Echo runs</span><span class="sub" id="set-mode">Mac</span><span class="chev" aria-hidden="true"></span></button>
+      <button class="row" id="set-mode-row"><span class="grow">Where Echo runs</span><span class="sub" id="set-mode">Phone</span><span class="chev" aria-hidden="true"></span></button>
       <div class="row"><span class="grow">Echo on your phone</span><span class="sub small" id="set-cloud">—</span></div>
       <button class="row" role="switch" aria-checked="false" id="sw-auto"><span class="grow">Switch to Phone when the Mac goes offline</span><span class="track"><span class="knob"></span></span></button>
       <div class="row col-row"><label for="set-shortcuts" class="small">Shortcuts Echo may run</label>
