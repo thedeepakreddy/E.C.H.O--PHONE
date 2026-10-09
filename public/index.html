@@ -110,7 +110,7 @@
     <button class="glass pill" id="mac-pill" aria-label="Where Echo runs: tap to change"><span class="dot" id="mac-dot"></span><span id="mac-name">Phone</span></button>
   </header>
   <!-- The live humanoid from Echo's control panel, drawn by humanoid-core.js. -->
-  <div class="hero-stage"><canvas id="core-canvas" role="img" aria-label="Echo, live"></canvas></div>
+  <button class="hero-stage" id="humanoid-talk" type="button" aria-label="Talk to Echo" aria-pressed="false"><canvas id="core-canvas" role="img" aria-label="Echo, live"></canvas></button>
   <div class="home-stack">
     <div class="speech-caption" id="speech-caption" aria-live="polite"></div>
     <div class="glass banner" id="home-banner" role="status" hidden>
@@ -125,7 +125,7 @@
       <button class="act" data-open="settings"><span class="bubble b58"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3h-4.4l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4.4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg></span>Settings</button>
       <button class="act" id="act-neural"><span class="bubble b58"><svg class="i22 mac-only" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7h8M7 8l4 8M17 9l-4 7"/></svg><svg class="i22 phone-only" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg></span><span class="mac-only">Neural</span><span class="phone-only">Brief me</span></button>
     </div>
-    <p class="voice-hint phone-only" id="voice-home" role="status">Tap Listen once. Keep the conversation going.</p>
+    <p class="voice-hint phone-only" id="voice-home" role="status" hidden></p>
     <div class="cards2">
       <button class="glass card weather" id="weather-card" aria-label="Weather">
         <span class="sub small row-i"><svg class="i11 fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg><span id="w-place">Weather</span></span>
@@ -151,7 +151,7 @@
 <!-- ============ CHAT ============ -->
 <section id="v-chat" class="view chat" aria-label="Chat" hidden>
   <header class="glass chat-head">
-    <canvas class="avatar" id="chat-core-canvas" role="img" aria-label="Echo's conversation reaction"></canvas>
+    <button class="humanoid-avatar" id="chat-humanoid-talk" type="button" aria-label="Talk to Echo" aria-pressed="false"><canvas class="avatar" id="chat-core-canvas" role="img" aria-label="Echo's conversation reaction"></canvas></button>
     <button class="conversation-title" id="conversation-open" aria-label="Open conversations and folders"><b id="conversation-title">Echo</b><span class="presence" id="presence">on your phone</span></button>
     <button class="bubble b44" id="conversation-new" aria-label="New conversation">+</button>
     <button class="bubble b44" id="chat-talk" aria-label="Talk to Echo" aria-pressed="false"><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></button>

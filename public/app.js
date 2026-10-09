@@ -124,12 +124,14 @@
   // ---------- views ----------
   const TABS = ["home", "today", "chat", "memory", "more"];
   let experience = null, currentThread = store.get(`echo_thread_${DEV}`) || null;
+  let voiceSession = null, homeRec = null, macRecordingGeneration = 0;
   const INSTALLATION = store.get("echo_installation") || crypto.randomUUID();
   store.set("echo_installation", INSTALLATION);
   let currentView = "signin", lastTab = store.get("echo_tab") || "home";
   /** Where each pushed page's Back goes: the page it was opened from. */
   const backTo = {};
   function show(view, { back = false } = {}) {
+    if (voiceSession?.active && !["home", "chat"].includes(view)) stopVoice();
     if (view === "screen" && !(S && macOnline)) { toast("That needs your Mac, and it's offline right now.", true); return; }
     if (!back && !TABS.includes(view) && view !== currentView && currentView !== "signin") backTo[view] = currentView;
     currentView = view;
@@ -267,6 +269,7 @@
   }
   /** Signed out of the Mac. `full` also forgets the cloud pass (Sign out of this phone). */
   function signedOut(message, { full = false } = {}) {
+    stopVoice();
     S = ""; store.set("echo_s", null);
     stopPolling();
     if (full) {
@@ -527,9 +530,10 @@
   }
   function paintPhoneHome() {
     const ready = !!(cloudInfo && cloudInfo.ready);
-    body.dataset.status = cloudBusy ? "thinking" : "idle";
-    $("state-label").textContent = cloudBusy ? "THINKING" : "ON YOUR PHONE";
-    stateDot(cloudBusy ? "#b98cff" : "#5ee7f5");
+    const voiceState = voiceSession?.active ? voiceSession.state : null;
+    body.dataset.status = voiceState === "listening" || voiceState === "speaking" ? voiceState : cloudBusy ? "thinking" : "idle";
+    $("state-label").textContent = voiceState ? ({ starting: "OPENING MIC", listening: "LISTENING", thinking: "THINKING", speaking: "SPEAKING" }[voiceState]) : cloudBusy ? "THINKING" : "ON YOUR PHONE";
+    stateDot(voiceState === "speaking" ? "#ffcf40" : cloudBusy ? "#b98cff" : "#5ee7f5");
     $("brain-name").textContent = !passValid() ? "Connecting…" : ready ? prettyModel(cloudInfo.model) : cloudInfo ? "Not set up" : "";
     const u = cloudInfo && cloudInfo.usage;
     setStats([[u ? u.messages : "—", "Messages"], [u ? u.requests : "—", "Requests"], [u && u.limit ? Math.max(0, u.limit - u.requests) : "—", "Left today"], [macOnline ? "On" : "Off", "Mac"]]);
@@ -557,6 +561,7 @@
 
   // ---------- where Echo runs ----------
   async function setMode(m) {
+    stopVoice();
     if (m === "mac" && !(T && S)) { closeSheets(); prepareSignIn(); return; }
     if (m === "phone") {
       try { await ensurePhoneSession(); } catch (e) { toast(e.message, true); return; }
@@ -669,6 +674,8 @@
 
   // ---------- home actions ----------
   $("act-stop").addEventListener("click", async () => {
+    stopVoice();
+    finishNote(false);
     stopSpeaking();
     voiceAskedAt = 0;
     if (cloudBusy) { cloudAbort?.abort(); setCloudBusy(false); toast("Stopped"); }
@@ -681,7 +688,34 @@
     try { await api("/action", { json: { type: "open-neural" } }); toast("Neural map is open on your Mac"); } catch (e) { toast(e.message, true); }
   });
 
-  // ---------- voice capture (Whisper on the Mac does the listening) ----------
+  // ---------- microphone capture ----------
+  async function conversationMic(onFrame, onError) {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser can't use the microphone.");
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) throw new Error("Voice isn't supported in this browser.");
+    const ctx = new Audio();
+    let stream, src, node, closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      ctx.onstatechange = null;
+      if (node) { node.onaudioprocess = null; node.disconnect(); }
+      src?.disconnect();
+      stream?.getTracks().forEach((track) => { track.onended = null; track.stop(); });
+      ctx.close().catch(() => {});
+    };
+    try {
+      await ctx.resume();
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+      src = ctx.createMediaStreamSource(stream);
+      node = ctx.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = (e) => onFrame(e.inputBuffer.getChannelData(0));
+      src.connect(node); node.connect(ctx.destination);
+      stream.getAudioTracks().forEach((track) => { track.onended = () => onError(new Error("Microphone paused. Tap Listen to resume.")); });
+      ctx.onstatechange = () => { if (!closed && ctx.state !== "running") onError(new Error("Voice paused. Tap Listen to resume.")); };
+      return { rate: ctx.sampleRate, close };
+    } catch (e) { close(); throw e; }
+  }
   async function capture() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("This browser can't use the microphone.");
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
@@ -713,10 +747,56 @@
     return buf;
   }
 
-  // Home "Listen": talk to Echo; the answer is always read out on this phone.
-  // (Chat is the place for text: typed messages and voice notes get written replies.)
-  let homeRec = null;
+  voiceSession = new window.EchoVoice.Session({
+    acquire: conversationMic,
+    onTurn: (chunks, rate, current) => sendCloudVoice(toWav(chunks, rate, 16000), {
+      speak: true, current, onSpeak: () => { if (current()) voiceSession.phase("speaking"); },
+    }),
+    onState: (state) => {
+      const active = state !== "off";
+      const line = { off: "Tap Listen once. Keep the conversation going.", starting: "Opening microphone…", listening: "Listening · pause when you're ready to send", thinking: "Echo is thinking…", speaking: "Echo is speaking · listening resumes next" }[state];
+      $("act-listen").setAttribute("aria-pressed", String(active));
+      $("listen-label").textContent = active ? "Pause" : "Listen";
+      $("chat-talk").setAttribute("aria-pressed", String(active));
+      $("chat-talk").setAttribute("aria-label", active ? "Stop voice conversation" : "Start voice conversation");
+      $("voice-home").textContent = line;
+      $("voice-home").hidden = !active;
+      $("voice-chat-status").textContent = line;
+      $("voice-chat").hidden = !active;
+      for (const id of ["humanoid-talk", "chat-humanoid-talk"]) {
+        $(id).setAttribute("aria-pressed", String(active));
+        $(id).setAttribute("aria-label", active ? "Pause voice conversation" : "Talk to Echo");
+      }
+      if (mode === "phone") paintPhoneHome();
+      window.echoCore?.avatar();
+    },
+    onError: (e) => {
+      cloudAbort?.abort(); setCloudBusy(false); stopSpeaking();
+      toast(e.name === "NotAllowedError" ? "Allow microphone access in your browser settings, then tap Listen." : e.message || "Microphone unavailable. Tap Listen to try again.", true);
+    },
+  });
+  function stopVoice() {
+    ++macRecordingGeneration;
+    const active = voiceSession.active;
+    voiceSession.stop();
+    if (active) { cloudAbort?.abort(); setCloudBusy(false); stopSpeaking(); }
+    if (homeRec) { homeRec.cancel(); homeRec = null; $("act-listen").setAttribute("aria-pressed", "false"); }
+    voiceAskedAt = 0;
+  }
+  function toggleVoice() {
+    if (voiceSession.active) return stopVoice();
+    if (cloudBusy || preparingCloud) return toast("Let Echo finish this reply first.");
+    finishNote(false);
+    stopSpeaking(); primeSpeech();
+    void voiceSession.start();
+  }
+  $("voice-pause").addEventListener("click", stopVoice);
+  for (const id of ["humanoid-talk", "chat-humanoid-talk"]) {
+    $(id).addEventListener("click", () => mode === "phone" ? toggleVoice() : $("act-listen").click());
+  }
+  // Mac mode retains its existing tap-to-send recording protocol.
   $("act-listen").addEventListener("click", async () => {
+    if (mode === "phone") return toggleVoice();
     // Anything still queued is dropped before the tap unlocks speech, or the
     // unlock would play it: that was the "ghost voice" of an old reply.
     stopSpeaking();
@@ -724,13 +804,17 @@
     const btn = $("act-listen");
     if (!homeRec) {
       voiceAskedAt = 0; // talking over Echo: the reply to the last question isn't wanted any more
-      try { homeRec = await capture(); btn.setAttribute("aria-pressed", "true"); toast("Listening… tap again to send"); }
+      const generation = ++macRecordingGeneration;
+      try {
+        const rec = await capture();
+        if (generation !== macRecordingGeneration || document.hidden || mode !== "mac") { rec.cancel(); return; }
+        homeRec = rec; btn.setAttribute("aria-pressed", "true"); toast("Listening… tap again to send");
+      }
       catch (e) { toast(e.message || "Allow the microphone to talk to Echo.", true); }
       return;
     }
     const wav = homeRec.stop(); homeRec = null; btn.setAttribute("aria-pressed", "false");
     if (wav.byteLength < 44 + 16000) return toast("Too short — tap, speak, then tap again.", true);
-    if (mode === "phone") return void sendCloudVoice(wav, { speak: true });
     try { await api("/voice", { body: wav }); voiceAskedAt = Date.now(); toast("Sent to Echo"); } catch { toast("Couldn't reach your Mac.", true); }
   });
 
@@ -742,12 +826,17 @@
   /** When this phone last sent its voice from the Echo page: only the answer to that is read aloud. */
   let voiceAskedAt = 0;
   const VOICE_REPLY_MS = 120_000;
+  let speechDone = null;
   function stopSpeaking() {
+    speechDone?.();
     if (window.speechSynthesis) speechSynthesis.cancel();
     if (talking) { talking = 1; speechEnd(); }
   }
   // Leaving or coming back to the app: whatever was queued is old by then, so it never plays later.
-  document.addEventListener("visibilitychange", stopSpeaking);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { stopVoice(); finishNote(false); stopSpeaking(); }
+  });
+  window.addEventListener("pagehide", () => { stopVoice(); finishNote(false); stopSpeaking(); });
   function primeSpeech() {
     if (!window.speechSynthesis) return;
     try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch { /* fine */ }
@@ -769,20 +858,29 @@
     firstEvents = false;
   }
   function say(text) {
-    if (!window.speechSynthesis || document.hidden) return;
+    if (!window.speechSynthesis || document.hidden) return Promise.resolve(false);
     // One reply at a time: a new one replaces anything queued, so nothing old can play later.
-    speechSynthesis.cancel();
-    if (talking) { talking = 1; speechEnd(); }
+    stopSpeaking();
     const ut = new SpeechSynthesisUtterance(text);
     const voices = speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang));
     ut.voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices[0] || null;
-    let ended = false;
-    const done = () => { if (!ended) { ended = true; speechEnd(); } };
-    ut.onboundary = (e) => { if (Number.isFinite(e.charIndex)) speechWord(e.charIndex); };
-    ut.onend = done;
-    ut.onerror = done;
-    speechStart(text);
-    speechSynthesis.speak(ut);
+    return new Promise((resolve) => {
+      let ended = false, timer;
+      const done = (spoken = false) => {
+        if (ended) return;
+        ended = true; clearTimeout(timer);
+        if (speechDone === done) { speechDone = null; speechEnd(); }
+        resolve(spoken);
+      };
+      speechDone = done;
+      ut.onboundary = (e) => { if (!ended && Number.isFinite(e.charIndex)) speechWord(e.charIndex); };
+      ut.onend = () => done(true);
+      ut.onerror = () => done(false);
+      // A lost platform callback must not leave an active conversation stuck.
+      timer = setTimeout(() => { done(false); speechSynthesis.cancel(); }, VOICE_REPLY_MS);
+      speechStart(text);
+      try { speechSynthesis.speak(ut); } catch { done(false); }
+    });
   }
 
   // ---------- Echo speaking on the phone: the figure bursts, the words show ----------
@@ -1046,20 +1144,21 @@
     if (mode === "phone") paintPhoneHome();
     window.echoCore?.avatar();
   }
-  async function askCloud(path, payload, { speak = false } = {}) {
+  async function askCloud(path, payload, { speak = false, current = () => true, onSpeak } = {}) {
+    if (!current()) return null;
     if (!passValid()) { toast("Tap Get started to use Echo on this phone.", true); return null; }
     cloudAbort?.abort();
     const abort = (cloudAbort = new AbortController());
     setCloudBusy(true);
     try {
       const d = await cloudApi(path, { ...payload, threadId: currentThread, context: cloudContext() }, { signal: abort.signal });
+      if (abort.signal.aborted || !current()) return null;
       const reply = { k: payload.requestId ? `${payload.requestId}-echo` : newKey(), at: Date.now(), from: "echo", text: d.reply, kind: "text", src: "phone", threadId: currentThread,
         actions: d.actions || [], sources: d.sources || [], saved: d.saved || [], captures: d.captures || [], references: d.references || [] };
       putMessage(reply);
       prepareActions(reply);
       lastCloudLine = d.reply;
       if (d.usage && cloudInfo) cloudInfo.usage = d.usage;
-      if (speak) say(d.reply);
       if (currentView !== "chat") { unread++; renderBadge(); }
       renderMode();
       window.echoCore?.react(d.expression || "attentive");
@@ -1067,6 +1166,12 @@
       const delegation = reply.actions.find((a) => a.type === "browse" && a.autoStart);
       if (delegation) setTimeout(() => runEcho(delegation.data.task), 0);
       syncToMac();
+      if (speak) {
+        onSpeak?.();
+        const spoken = await say(d.reply);
+        if (!spoken && current()) toast("Echo's reply is in Chat. Tap Listen to resume voice.");
+        d.voiceSpoken = spoken;
+      }
       return d;
     } catch (e) {
       if (e.name !== "AbortError") toast(cloudProblem(e), true);
@@ -1076,6 +1181,7 @@
     }
   }
   async function sendCloud(text) {
+    if (voiceSession.active) stopVoice();
     if (cloudBusy || preparingCloud) { restoreInput(text); return toast("Let Echo finish this reply first."); }
     preparingCloud = true;
     try { await experience?.ensureThread(); } catch (e) { toast(e.message, true); restoreInput(text); return; } finally { preparingCloud = false; }
@@ -1096,12 +1202,14 @@
     if (cloudBusy || preparingCloud) return toast("Let Echo finish this reply first.");
     preparingCloud = true;
     try { await experience?.ensureThread(); } catch (e) { return toast(e.message, true); } finally { preparingCloud = false; }
+    if (opts.current && !opts.current()) return null;
     const history = historyNow();
     const mine = { k: newKey(), at: Date.now(), from: "you", text: "Voice message", kind: "voice", src: "phone", threadId: currentThread };
     putMessage(mine);
     const d = await askCloud("/cloud/voice", { audio: toBase64(wav), history, requestId: mine.k }, opts);
-    if (!d) return dropMessage(mine);
+    if (!d) { if (!chatCache.some((m) => m.k === `${mine.k}-echo`)) dropMessage(mine); return null; }
     if (d.transcript) { mine.text = d.transcript; saveCache(); renderChat(); }
+    return opts.speak && !d.voiceSpoken ? null : d;
   }
   // Buttons under Phone mode's answers. Nothing happens until one is tapped.
   async function makeIcs(a) {
@@ -1195,15 +1303,24 @@
     } catch { /* tried again on the next poll */ } finally { syncing = false; }
   }
 
-  // Voice notes: hold the mic (or tap the header button) to record.
-  let note = null, noteTimer = 0;
+  // Voice notes: hold the composer mic; the Chat header starts a conversation.
+  let note = null, noteTimer = 0, noteGeneration = 0, notePending = false;
   async function startNote() {
-    if (note) return;
-    try { note = await capture(); } catch (e) { return toast(e.message || "Allow the microphone to send voice notes.", true); }
+    if (note || notePending) return;
+    stopVoice(); stopSpeaking();
+    const generation = ++noteGeneration;
+    notePending = true;
+    try {
+      const rec = await capture();
+      if (generation !== noteGeneration || document.hidden) { rec.cancel(); return; }
+      note = rec;
+    } catch (e) { if (generation === noteGeneration) toast(e.message || "Allow the microphone to send voice notes.", true); return; }
+    finally { if (generation === noteGeneration) notePending = false; }
     $("recording").hidden = false;
     noteTimer = setInterval(() => { const s = Math.floor((Date.now() - note.startedAt) / 1000); $("rec-time").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 250);
   }
   async function finishNote(send) {
+    ++noteGeneration; notePending = false;
     if (!note) return;
     clearInterval(noteTimer); $("recording").hidden = true;
     const rec = note; note = null;
@@ -1229,13 +1346,12 @@
     e.preventDefault(); sendBtn.setPointerCapture(e.pointerId); holdStart = { x: e.clientX, y: e.clientY }; startNote();
   });
   sendBtn.addEventListener("pointerup", (e) => {
-    if (!note) return;
     const moved = Math.hypot(e.clientX - holdStart.x, e.clientY - holdStart.y) > 80;
     finishNote(!moved);
   });
   sendBtn.addEventListener("pointercancel", () => finishNote(false));
   sendBtn.addEventListener("contextmenu", (e) => e.preventDefault());
-  $("chat-talk").addEventListener("click", () => (note ? finishNote(true) : startNote()));
+  $("chat-talk").addEventListener("click", () => mode === "phone" ? toggleVoice() : (note || notePending ? finishNote(true) : startNote()));
 
   // ---------- missions ----------
   // What Echo on the Mac is working on (its /status: missions, agents,
@@ -3221,6 +3337,7 @@
     react: (expression) => window.echoCore?.react(expression), notifications: enableNotifications,
     legacyMessages: () => chatCache.filter((m) => m.src === "phone" && !m.threadId),
     setThread: (id, messages) => {
+      if (currentThread && currentThread !== id) stopVoice();
       currentThread = id;
       if (cloudBusy) return;
       chatCache = [...chatCache.filter((m) => m.src !== "phone" || (m.threadId && m.threadId !== id)), ...messages]; saveCache(); renderChat();
@@ -3230,6 +3347,7 @@
     draft: (text) => { mode = "phone"; store.set("echo_mode", "phone"); renderMode(); show("chat"); restoreInput(text); input.focus(); },
     snap: () => { mode = "phone"; store.set("echo_mode", "phone"); renderMode(); $("snap-file").click(); },
     restore: async (d) => {
+      stopVoice();
       if (PASS) await cloudApi("/cloud/push/unsubscribe", { installation: INSTALLATION }).catch(() => {});
       cloudAbort?.abort(); stopPolling(); T = null; S = ""; store.set("echo_t", null); store.set("echo_s", null);
       DEV = d.device; store.set("echo_dev", DEV); savePass(d.cloudPass); mode = "phone"; store.set("echo_mode", "phone");

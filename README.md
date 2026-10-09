@@ -64,6 +64,8 @@ The link carries a private token. Treat it like a key, and don't post it anywher
 
 Replies to anything sent from the phone come back to the phone only. Echo doesn't say them out loud on the Mac.
 
+On Phone, tap Listen or either humanoid once to start a continuous voice conversation. A 1.4-second speech pause sends each turn, Echo reads the reply, then listens again. Tap Pause/Stop to end it. Voice also stops when you leave Echo/Chat, hide the app, change accounts or modes, or the microphone is interrupted. The composer still supports hold-to-record voice notes. The Mac's recording protocol is unchanged.
+
 ## Phone mode
 
 Tap the pill at the top right of the Echo page to choose where Echo runs:

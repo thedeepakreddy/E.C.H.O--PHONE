@@ -1,5 +1,10 @@
 # Echo Phone: a connected daily assistant
 
+## Continuous voice follow-up
+
+Tapping either humanoid shares the Listen action, including a keyboard-accessible button and active state. Preserve the newly rendered launcher icons and icon cache versions. Restore the pre-logo idle Home layout by keeping the unfinished voice status markup hidden until a voice session starts; no visual redesign or humanoid animation replacement.
+On Phone, Listen and the Chat header voice button start one foreground conversation. A speech pause sends the turn; capture stays gated while the request and spoken reply complete, then resumes automatically. No new setting is required. Keep hold-to-record notes and the Mac's existing recording flow. Show listening/thinking/speaking and a clear stop control. Stop, leaving the app, account/mode changes and microphone interruption release capture and invalidate pending turns. Silence never creates a request. Cap each utterance below the existing voice limit. Use the current microphone/PCM pipeline rather than browser speech recognition, with testable speech segmentation and session lifecycle. Verify synthetic audio, permission races, cancellation, spoken-reply completion and mobile layout before pushing and deploying.
+
 ## Experience
 Five destinations: Echo (voice and a responsive humanoid), Today (commitments and dates), Chat (conversations organized in folders), Saved (searchable personal memory), More (browser, Mac missions, world, settings, recovery). Keep the existing home-indicator spacing and optional Mac connection.
 

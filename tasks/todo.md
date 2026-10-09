@@ -1,5 +1,11 @@
 # Echo Phone feature checklist
 
+## Continuous voice
+- [x] Add speech pause detection and a cancellable microphone session.
+- [x] Integrate Home/Chat turn-taking, humanoid tap controls, spoken replies and foreground/account cleanup.
+- [x] Verify 97 regression tests; Chromium and WebKit at 390×844 and 375×667; two automatic turns through native Web Audio using a synthetic microphone; normal/reduced-motion humanoid rendering.
+- [x] Preserve the new launcher icons and restore the original idle layout; prepare the complete release for GitHub push and matching Render deployment verification.
+
 - [x] Inspect architecture and integrate newer GitHub commits while preserving the local title.
 - [x] Plan information architecture, automatic behavior and privacy boundaries.
 - [x] Implement daily items and recurring scheduling.

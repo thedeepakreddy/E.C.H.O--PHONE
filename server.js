@@ -66,7 +66,7 @@ const PUBLIC = join(fileURLToPath(new URL(".", import.meta.url)), "public");
 /** The app's version: a hash of its files, so an open app can tell it's out of date and reload. */
 export const APP_VERSION = (() => {
   const h = createHash("sha256");
-  for (const f of ["index.html", "app.js", "experience.js", "app.css", "humanoid-core.js", "sw.js"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
+  for (const f of ["index.html", "app.js", "experience.js", "voice-session.js", "app.css", "humanoid-core.js", "sw.js"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
   return h.digest("hex").slice(0, 12);
 })();
 const TYPES = {

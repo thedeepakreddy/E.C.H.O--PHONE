@@ -237,7 +237,9 @@ body[data-status="asleep"] { --glow: #ff4d4d; --spin: 22s; --m50-hue: -178deg; -
 /* The live humanoid: its stage is the gap between header and status pill, and
    the canvas runs past it so the crown meets the header and the shoulders
    fade out behind the controls. */
-.hero-stage { position: relative; z-index: 0; flex: 1; min-height: 0; pointer-events: none; }
+.hero-stage { position: relative; z-index: 0; flex: 1; min-height: 0; width: 100%; }
+#core-canvas { pointer-events: none; }
+.humanoid-avatar { flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; }
 #core-canvas { position: absolute; left: 0; width: 100%; top: -56px; height: calc(100% + 176px); display: block; }
 .hero-fade { position: absolute; z-index: 1; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(2, 7, 10, .6) 0%, rgba(2, 7, 10, 0) 16%, rgba(2, 7, 10, 0) 46%, rgba(2, 7, 10, .8) 62%, var(--bg) 78%); }
 .home .top { position: relative; z-index: 2; }
@@ -626,6 +628,10 @@ select.experience-input { font: inherit; background: #152c38; border: 1px solid 
 .echo-curiosity { display: flex; gap: 4px; align-items: center; padding: 0 8px; }
 .curiosity-question { color: #c9d8e2; font-size: 12px; line-height: 1.4; text-align: left; flex: 1; }
 .curiosity-dismiss { color: #c9d8e2; min-width: 44px; min-height: 44px; font-size: 22px; }
+.voice-hint { text-align: center; color: #c9d8e2; font-size: 12px; min-height: 17px; }
+.voice-chat { margin: 8px 12px 0; border-radius: 22px; padding: 4px 8px 4px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: none; font-size: 13px; }
+.voice-chat .pill { min-height: 44px; padding: 8px 16px; }
+#act-listen[aria-pressed="true"] .bubble, #chat-talk[aria-pressed="true"] { border: 1px solid #5ee7f5; background-color: #153743; }
 body[data-expression="curious"] #core-canvas { filter: drop-shadow(0 0 8px rgba(169, 139, 255, .3)); }
 body[data-expression="celebrate"] #core-canvas { filter: drop-shadow(0 0 12px rgba(62, 230, 176, .3)); }
 @media (max-height: 700px) { .echo-curiosity { position: absolute; top: calc(var(--safe-top) + 72px); left: 20px; right: 20px; } }
