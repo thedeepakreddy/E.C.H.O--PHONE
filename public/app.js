@@ -617,6 +617,19 @@
     if (!r.ok) throw Object.assign(new Error(d.message || `HTTP ${r.status}`), { status: r.status, data: d });
     return d;
   }
+  // Only categorical diagnostics leave the phone: never error text, URLs or conversation content.
+  let diagnosticAt = 0;
+  function reportProblem(feature, code) {
+    if (!PASS || Date.now() - diagnosticAt < 15_000) return;
+    diagnosticAt = Date.now();
+    const platform = /iPhone|iPad|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1 ? "ios" : /Android/.test(navigator.userAgent) ? "android" : "desktop";
+    fetch("/cloud/diagnostics", { method: "POST", headers: { "content-type": "application/json", "x-echo-pass": PASS },
+      body: JSON.stringify({ feature, code, platform, app: document.querySelector('meta[name="app-version"]')?.content,
+        installed: matchMedia("(display-mode: standalone)").matches || navigator.standalone === true }),
+    }).catch(() => {});
+  }
+  window.addEventListener("error", () => reportProblem("app", "runtime"));
+  window.addEventListener("unhandledrejection", (e) => { if (e.reason?.name !== "AbortError") reportProblem("app", "promise"); });
   async function refreshCloud() {
     if (currentView === "signin" || (!PASS && !(T && S))) return;
     try {
@@ -771,6 +784,7 @@
       window.echoCore?.avatar();
     },
     onError: (e) => {
+      reportProblem("voice", e.name === "NotAllowedError" ? "microphone_denied" : "microphone_unavailable");
       cloudAbort?.abort(); setCloudBusy(false); stopSpeaking();
       toast(e.name === "NotAllowedError" ? "Allow microphone access in your browser settings, then tap Listen." : e.message || "Microphone unavailable. Tap Listen to try again.", true);
     },

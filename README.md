@@ -2,6 +2,14 @@
 
 Echo's standalone phone assistant, with an optional relay connection to Echo on your Mac over Wi-Fi or mobile data.
 
+## Owner admin
+
+Open `/admin`, or **More → Admin**, for diagnostics and Phone account management. Set `ECHO_ADMIN_PASSWORD` on Render to a unique private password of at least 24 characters. Admin has its own HttpOnly, SameSite session cookie and CSRF-protected actions; normal Phone and Mac credentials never grant admin access. Sessions expire after six hours and on restart. Never commit the password; `.admin-password` is ignored for a private local owner copy.
+
+The dashboard shows the running app/commit, storage reads, AI configuration and shared quota counters, optional Mac availability, reminder ticks, recent HTTP failures and categorical phone runtime/microphone reports. AI configuration does not prove the provider is answering. Problems and request metrics cover the current server run; the latest 100 admin account actions persist with durable storage. Sanitized failing server requests log a request ID to Render. Diagnostic exports omit account IDs. No chat text, saved content, photos, credentials, push endpoints or raw client errors are returned by admin.
+
+Phone accounts are identified by ID, not invented names or emails. Search using the last six characters shown in **More → Your Echo**. Manage an account to suspend/restore Phone access, disconnect notifications, or revoke its recovery key. Confirmation explains each consequence. Suspension preserves data, rejects existing Phone passes and recovery, blocks browser sessions/calendar uploads, and skips notification delivery. Separate Mac sessions and previously approved Mac work are outside this Phone suspension. Recovery revocation leaves signed-in phones connected so they can generate a new key. Account deletion is deliberately not exposed.
+
 ```
 iPhone (Home Screen app) ──https──▶ echo-remote on Render ◀──https long-poll── Echo on your Mac
 ```

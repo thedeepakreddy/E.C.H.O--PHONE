@@ -37,6 +37,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveKeys, signPass, verifyPass, seal, unseal } from "./lib/secure.js";
 import { createStore } from "./lib/store.js";
+import { createAdmin } from "./lib/admin.js";
 import { createGemini, pickBrowseModels } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
@@ -66,7 +67,7 @@ const PUBLIC = join(fileURLToPath(new URL(".", import.meta.url)), "public");
 /** The app's version: a hash of its files, so an open app can tell it's out of date and reload. */
 export const APP_VERSION = (() => {
   const h = createHash("sha256");
-  for (const f of ["index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "app.css", "humanoid-core.js", "sw.js"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
+  for (const f of ["index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
   return h.digest("hex").slice(0, 12);
 })();
 const TYPES = {
@@ -146,6 +147,7 @@ export function createRelay({
   secret, now = () => Date.now(), fetchJson = defaultFetchJson, pollMs = POLL_MS, requestMs = REQUEST_MS,
   gemini = null, store = null, limits = {},
   publicUrl = "https://echo-phone.onrender.com", pushFetch = fetch, pushAnyHost = false, browseAnyHost = false,
+  adminPassword = "", deployment = {},
 } = {}) {
   if (!secret || secret.length < 32) throw new Error("RELAY_SECRET must be set (at least 32 characters).");
   const secretBuf = Buffer.from(secret);
@@ -175,24 +177,25 @@ export function createRelay({
       const phones = (await store.get("phones")) ?? { devices: {} };
       phones.devices ??= {};
       const result = await fn(phones);
-      if (save) await store.set("phones", phones);
+      if (typeof save === "function" ? save() : save) await store.set("phones", phones);
       return result;
     });
     phonesLock = run.catch(() => {});
     return run;
   }
-  const deviceOf = (phones, id) => (phones.devices[id] ??= { sub: null, prefs: { ...DEFAULT_PREFS }, lastBrief: "", reminders: [], expenses: [] });
+  const deviceOf = (phones, id) => (phones.devices[id] ??= { sub: null, prefs: { ...DEFAULT_PREFS }, lastBrief: "", reminders: [], expenses: [], createdAt: now(), lastSeenAt: now() });
   const push = (sub, message) => sendPush(sub, message, { vapid, contact: publicUrl, fetchImpl: pushFetch, now: now() });
   const briefingTools = { weather: getWeather, worldRaw: async () => (await getWorld()).raw };
   let ticking = null;
   /** The timed work: due reminders and briefings. Never two at once. */
   function tick() {
+    if (!ticking) admin.tickStarted();
     ticking ??= withPhones((phones) => runTick({
       phones, now: now(), tools: briefingTools, macOnline: online(), push,
       digest: (id, dev) => dev.phoneOnly ? null : store.get("digest").catch(() => null),
       storeBriefing: (id, b, phoneOnly) => store.set(`brief:${id}${phoneOnly ? ":phone" : ""}`, b, 3 * 86400),
       phoneCalendar: (id) => store.get(`cal:${id}`).catch(() => null),
-    })).catch(() => false).finally(() => { ticking = null; });
+    })).then((result) => { admin.tickFinished(true); return result; }).catch(() => { admin.tickFinished(false); return false; }).finally(() => { ticking = null; });
     return ticking;
   }
   /** Hand-off jobs (lib/handoff.js), sealed under one key; changes one at a time. */
@@ -366,7 +369,7 @@ export function createRelay({
 
   let lastPoll = 0;
 
-  const online = () => now() - lastPoll < ONLINE_MS;
+  const online = () => lastPoll > 0 && now() - lastPoll < ONLINE_MS;
   const agentAuthorized = (req) => {
     const given = Buffer.from(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
     return given.length === secretBuf.length && timingSafeEqual(given, secretBuf);
@@ -374,7 +377,28 @@ export function createRelay({
   // Render puts the caller's address first in X-Forwarded-For.
   const clientIp = (req) => String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "?";
 
+  const admin = createAdmin({ password: adminPassword, now, withPhones, withKey, store, send, readJson, clientIp, publicUrl,
+    snapshot: async () => ({ app: APP_VERSION, node: process.version, commit: /^[a-f0-9]{7,40}$/.test(deployment.commit) ? deployment.commit : null,
+      brain: { configured: Boolean(cloud), model: gemini?.model ?? null }, storage: { durable: store.remote, connected: true },
+      usage: cloud ? await cloud.usage() : null,
+      schedulerConfigured: deployment.scheduler === true, mac: { online: online(), lastSeenAt: lastPoll || null, queued: queue.length, inFlight: inFlight.size, waitingJobs },
+    }),
+  });
+  async function accountAccess(device, req, { touch = false } = {}) {
+    let dirty = false;
+    const allowed = await withPhones((phones) => {
+      dirty = !phones.devices[device];
+      const dev = deviceOf(phones, device);
+      if (dev.suspended) return false;
+      if (touch && (!dev.lastSeenAt || now() - dev.lastSeenAt >= 5 * 60_000)) { dev.lastSeenAt = now(); dirty = true; }
+      return true;
+    }, { save: () => dirty });
+    if (req) req.adminDevice = device;
+    if (!allowed) throw Object.assign(new Error("This Echo Phone account is suspended. Contact the app owner."), { status: 403, suspended: true });
+  }
+
   function send(res, status, body, headers = {}) {
+    if (body && typeof body === "object" && ["quota", "cap", "setup", "failed", "offline", "busy", "suspended", "pass", "minute"].includes(body.error)) res.adminErrorCode = body.error;
     const data = typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body);
     res.writeHead(status, {
       ...SECURITY, "cache-control": "no-store",
@@ -563,6 +587,7 @@ export function createRelay({
       const claims = previous ? verifyPass(keys.pass, previous, { minGen: passGen, now: now(), allowExpired: true }) : null;
       if (previous && !claims) return send(res, 401, { error: "pass", message: "This phone session ended. Tap Get started again." });
       const device = claims?.device ?? randomBytes(16).toString("hex");
+      if (claims) await accountAccess(device, req);
       // This endpoint never issues paired privileges, even when renewing an old Mac pass.
       await withPhones((phones) => { deviceOf(phones, device).phoneOnly = true; });
       const cloudPass = signPass(keys.pass, { device, gen: 0, now: now(), phoneOnly: true });
@@ -584,6 +609,7 @@ export function createRelay({
       const hash = recoveryHash(code), record = await store.get(`recovery:${hash}`);
       const valid = record?.device && await withPhones((phones) => phones.devices[record.device]?.recoveryHash === hash, { save: false });
       if (!valid) return send(res, 401, { message: "That recovery key isn't valid, or it was replaced." });
+      await accountAccess(record.device, req, { touch: true });
       return send(res, 200, { device: record.device, cloudPass: signPass(keys.pass, { device: record.device, gen: 0, now: now(), phoneOnly: true }) });
     } catch (e) { return sendCloudError(res, e); }
   }
@@ -591,7 +617,9 @@ export function createRelay({
   /** The cloud pass on this request, if it is genuine and current. */
   async function cloudClaims(req) {
     await passGenLoaded;
-    return verifyPass(keys.pass, req.headers["x-echo-pass"], { minGen: passGen, now: now() });
+    const claims = verifyPass(keys.pass, req.headers["x-echo-pass"], { minGen: passGen, now: now() });
+    if (claims) await accountAccess(claims.device, req, { touch: true });
+    return claims;
   }
   function rateLimited(device) {
     const t = now();
@@ -606,6 +634,7 @@ export function createRelay({
   }
   const CLOUD_STATUS = { setup: 503, cap: 429, quota: 429, minute: 429, busy: 429, input: 400, failed: 502 };
   function sendCloudError(res, e) {
+    if (e?.suspended) return send(res, 403, { error: "suspended", message: e.message });
     if (e?.input) return send(res, 400, { error: "input", message: e.message });
     if (e instanceof CloudError) return send(res, CLOUD_STATUS[e.kind] ?? 502, { error: e.kind, message: e.message, resetsAt: e.resetsAt ?? null, retryAfter: e.retryAfter ?? null });
     if (e?.status === 413) return send(res, 413, { error: "input", message: "That's too long to send." });
@@ -616,6 +645,12 @@ export function createRelay({
   async function cloudRoute(req, res, path) {
     const claims = await cloudClaims(req);
     if (!claims) return send(res, 401, { error: "pass", message: "This phone session ended. Tap Get started to continue." });
+    if (path === "/cloud/diagnostics" && req.method === "POST") {
+      if (hitLimit(`diagnostics:${claims.device}`, 5)) return send(res, 429, { message: "Too many diagnostic reports." });
+      const body = await readJson(req, 1024);
+      const ok = admin.clientProblem(claims.device, body);
+      return send(res, ok ? 200 : 400, { ok });
+    }
     const macOnline = !claims.phoneOnly && online();
     // Pairing later preserves this phone's saved data and enables the Mac digest.
     if (!claims.phoneOnly && path === "/cloud/status") {
@@ -1034,7 +1069,9 @@ export function createRelay({
     try {
       const c = unseal(keys.store, m[1]);
       await passGenLoaded;
-      return c && c.exp > now() && (c.phoneOnly || c.g >= passGen) && typeof c.d === "string" ? c : null;
+      if (!(c && c.exp > now() && (c.phoneOnly || c.g >= passGen) && typeof c.d === "string")) return null;
+      await accountAccess(c.d, req);
+      return c;
     } catch { return null; }
   }
   const sendPage = (res, status, html) => send(res, status, html, { ...PAGE_HEADERS, "content-type": "text/html; charset=utf-8" });
@@ -1160,7 +1197,7 @@ export function createRelay({
   /** The iPhone's Shortcut posts today's events here each morning (see Settings → Calendar from this iPhone). */
   async function phoneCalendarUpload(req, res, key) {
     if (rateLimited(`cal:${key}`)) return send(res, 429, "Too many uploads this minute.");
-    const device = await withPhones((phones) => Object.entries(phones.devices).find(([, d]) => d.calKey && d.calKey.length === key.length && timingSafeEqual(Buffer.from(d.calKey), Buffer.from(key)))?.[0] ?? null, { save: false });
+    const device = await withPhones((phones) => Object.entries(phones.devices).find(([, d]) => !d.suspended && d.calKey && d.calKey.length === key.length && timingSafeEqual(Buffer.from(d.calKey), Buffer.from(key)))?.[0] ?? null, { save: false });
     if (!device) return send(res, 404, "This calendar link isn't valid any more. Copy the new one from Echo's Settings.");
     try {
       const raw = (await readBody(req, 64 * 1024)).toString("utf8");
@@ -1179,7 +1216,7 @@ export function createRelay({
   }
 
   async function serveStatic(res, path) {
-    const name = path === "/" ? "index.html" : path.slice(1);
+    const name = path === "/" ? "index.html" : ["/admin", "/admin/"].includes(path) ? "admin.html" : path.slice(1);
     const file = normalize(join(PUBLIC, name));
     if (!file.startsWith(PUBLIC + "/") || !TYPES[extname(file)]) return send(res, 404, "Not found");
     try {
@@ -1198,6 +1235,10 @@ export function createRelay({
   const handler = (req, res) => {
     const url = new URL(req.url ?? "/", "http://relay");
     const path = url.pathname;
+    admin.observe(req, res, path);
+    if (path.startsWith("/admin/api/")) return void admin.route(req, res, url).catch((e) => {
+      if (!res.headersSent) send(res, e instanceof SyntaxError ? 400 : e?.status === 413 ? 413 : 503, { message: e instanceof SyntaxError ? "Invalid request." : "Admin storage is unavailable. Check Render logs and retry." });
+    });
     if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", app: APP_VERSION, phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
     if (path === "/version") return send(res, 200, { app: APP_VERSION });
     if (path === "/phone/session") return void phoneSession(req, res);
@@ -1273,6 +1314,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const relay = createRelay({
     secret: relaySecret, store, gemini, publicUrl: env.RENDER_EXTERNAL_URL || "https://echo-phone.onrender.com",
     limits: { messages: Number(env.PHONE_DAILY_MESSAGES) || 200, snaps: Number(env.PHONE_DAILY_SNAPS) || 30, browseSteps: Number(env.PHONE_DAILY_BROWSE) || 300 },
+    adminPassword: env.ECHO_ADMIN_PASSWORD || "", deployment: { commit: env.RENDER_GIT_COMMIT, scheduler: Boolean(env.QSTASH_TOKEN) },
   });
   console.log(`Phone mode: brain ${gemini ? gemini.model : "off (no GEMINI_API_KEY)"}, store ${store.remote ? "Upstash" : "memory only (no UPSTASH_REDIS_REST_URL/TOKEN)"}`);
   // Browsing uses a stronger model with its own free quota: GEMINI_BROWSE_MODEL, or the best Flash model this key has.

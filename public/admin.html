@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#071014">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Echo · Admin</title>
+  <link rel="icon" href="/icons/icon-192.png?v=7">
+  <link rel="stylesheet" href="/admin.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="/"><img src="/icons/icon-192.png?v=7" width="38" height="38" alt=""><span>E.C.H.O <small>ADMIN</small></span></a>
+    <div class="header-actions"><a href="/">Back to Echo ↗</a><button id="logout" hidden>Sign out</button></div>
+  </header>
+  <main>
+    <section id="login-view" class="login-card">
+      <p class="eyebrow">OWNER ACCESS</p><h1>A clearer view of Echo.</h1>
+      <p class="muted">Find problems, check connections and look after your users.</p>
+      <form id="login-form">
+        <label for="password">Admin password</label>
+        <input id="password" type="password" autocomplete="current-password" required maxlength="256" placeholder="Your private admin password">
+        <button class="primary" id="login-button" type="submit">Open admin</button>
+      </form>
+      <p id="login-note" class="muted small">Checking admin access…</p>
+    </section>
+    <div id="console" hidden>
+      <div class="intro"><div><p class="eyebrow">ECHO PHONE</p><h1 id="page-title">Overview</h1><p class="muted" id="updated">Loading current status…</p></div><div class="tools"><button id="refresh">↻ Refresh</button><button id="export">Export diagnostics</button></div></div>
+      <nav aria-label="Admin pages"><button class="selected" data-page="overview" aria-current="page">Overview</button><button data-page="users">Users</button><button data-page="problems">Problems</button><button data-page="activity">Activity</button></nav>
+      <p id="notice" role="status" class="notice" hidden></p>
+      <section id="overview" class="page">
+        <div class="stats" id="stats"></div>
+        <div class="columns"><section class="panel"><div class="panel-heading"><h2>Connections</h2><span class="muted small">Live server state</span></div><div id="connections"></div></section><section class="panel"><h2>Running version</h2><dl id="version-details"></dl><div class="links"><a href="https://dashboard.render.com/web/srv-db2bve3bc2fs7382lcpg" target="_blank" rel="noopener noreferrer">Render logs & deploys ↗</a><a href="https://github.com/thedeepakreddy/E.C.H.O--PHONE" target="_blank" rel="noopener noreferrer">GitHub source ↗</a></div></section></div>
+        <section class="panel"><h2>Phone AI usage</h2><p class="muted small">Shared service counters for the current quota day. Configuration status does not test an AI request.</p><dl id="usage-details"></dl></section>
+        <section class="panel"><div class="panel-heading"><h2>Recent problems</h2><button data-page="problems">View all →</button></div><div id="recent-problems"></div></section>
+        <p class="muted small">Request statistics and problem reports cover this server run. Activity is saved in storage. Admin access expires after six hours or a server restart.</p>
+      </section>
+      <section id="users" class="page" hidden>
+        <div class="panel"><div class="panel-heading"><div><h2>Phone accounts</h2><p class="muted small">A restored phone shares the same account. IDs appear in More → Your Echo.</p></div></div><form id="search-form" class="search"><label class="sr" for="user-search">Search account ID</label><input id="user-search" placeholder="Search by account ID or last six characters" maxlength="32" type="search"><button type="submit">Search</button></form><div id="user-list"></div><div class="pagination"><button id="prev">← Previous</button><span class="muted small" id="user-count"></span><button id="next">Next →</button></div></div>
+      </section>
+      <section id="problems" class="page" hidden><div class="panel"><div class="panel-heading"><div><h2>Problems to investigate</h2><p class="muted small">Server failures, rejected requests and reports from phones. Limited to the latest 120.</p></div><label class="filter">Show <select id="problem-filter"><option value="all">All reports</option><option value="server">Server</option><option value="phone">Phones</option></select></label></div><div id="problem-list"></div></div><p class="muted small">Reports contain feature names, status codes and account IDs. Private messages, photos, passwords and error text are never collected here.</p></section>
+      <section id="activity" class="page" hidden><div class="panel"><h2>Admin activity</h2><p class="muted small">The latest 100 account actions. These are persistent when durable storage is connected.</p><div id="audit-list"></div></div></section>
+    </div>
+  </main>
+  <dialog id="user-dialog" aria-labelledby="user-title"><div class="dialog-head"><div><p class="eyebrow">PHONE ACCOUNT</p><h2 id="user-title"></h2></div><button id="close-user" aria-label="Close account details">✕</button></div><p class="muted small mono" id="user-id"></p><div id="user-detail"></div><p class="muted small">Suspension stops Phone access and notifications while keeping saved data. Separate Mac sign-in and work on the Mac remain independent.</p><div id="user-actions" class="action-stack"></div></dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-text" class="muted"></p><div class="confirm-actions"><button id="cancel-action">Cancel</button><button id="confirm-action" class="primary">Confirm</button></div></dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>
