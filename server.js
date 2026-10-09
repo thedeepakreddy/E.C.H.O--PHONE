@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 import { deriveKeys, signPass, verifyPass, seal, unseal } from "./lib/secure.js";
 import { createStore } from "./lib/store.js";
 import { createAdmin } from "./lib/admin.js";
+import { MAC_ROUTES } from "./lib/mac-routes.js";
 import { createGemini, pickBrowseModels } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
@@ -83,12 +84,6 @@ const SECURITY = {
   "content-security-policy":
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; manifest-src 'self'; worker-src 'self'",
 };
-/** Echo's own routes, forwarded. Anything else is a static file or a 404. */
-const FORWARDED = new Set([
-  "/login", "/status", "/events", "/pending", "/confirm", "/command", "/voice", "/mouse", "/keys",
-  "/action", "/stop", "/frame", "/signout-all", "/close", "/log", "/rtc/offer", "/rtc/answer", "/rtc/ice",
-  "/chat", "/chat/voice", "/chat/import", "/passkey/options", "/passkey/register", "/passkey/login",
-]);
 /** Phone mode: requests per device per minute, and how big a request may be. */
 export const CLOUD_RATE = 30;
 export const CLOUD_BODY = 256 * 1024;
@@ -1284,7 +1279,7 @@ export function createRelay({
       if (path === "/agent/reply" && req.method === "POST") return agentReply(req, res);
       return send(res, 404, "Not found");
     }
-    if (FORWARDED.has(path)) return forward(req, res, path, url.search);
+    if (MAC_ROUTES.has(path)) return forward(req, res, path, url.search);
     if (req.method === "GET") return serveStatic(res, path);
     send(res, 404, "Not found");
   };

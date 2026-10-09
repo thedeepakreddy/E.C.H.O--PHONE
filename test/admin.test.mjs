@@ -5,12 +5,13 @@ import { createRelay, APP_VERSION } from "../server.js";
 import { createStore } from "../lib/store.js";
 import { deriveKeys, seal } from "../lib/secure.js";
 import { runTick, addReminder } from "../lib/briefing.js";
+import { MAC_ROUTES } from "../lib/mac-routes.js";
 
 const SECRET = "admin-test-relay-secret-".repeat(3), PASSWORD = "owner-test-password-that-is-long-enough";
-async function fixture({ password = PASSWORD } = {}) {
+async function fixture({ password = PASSWORD, pollMs = 25_000, requestMs = 30_000 } = {}) {
   let time = Date.parse("2026-10-09T14:00Z");
   const store = createStore({ key: deriveKeys(SECRET).store, now: () => time });
-  const relay = createRelay({ secret: SECRET, store, now: () => time, adminPassword: password, publicUrl: "http://127.0.0.1",
+  const relay = createRelay({ secret: SECRET, store, now: () => time, adminPassword: password, pollMs, requestMs, publicUrl: "http://127.0.0.1",
     limits: { allowEphemeralRecovery: true }, fetchJson: async () => ({}) });
   const server = http.createServer(relay.handler);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -103,6 +104,39 @@ test("diagnostics whitelist fields, strip secret-bearing URLs and record failure
     assert.equal(overview.problems.some((p) => p.operation === "/cloud/chat" && p.status === 503), true);
     const encoded = JSON.stringify(overview); for (const secret of [PASSWORD, SECRET, phone.cloudPass, "private-token", "private question", "private-url"]) assert.equal(encoded.includes(secret), false);
     assert.equal(overview.requests.failures, 1); assert.equal(overview.storage.durable, false);
+  } finally { await f.close(); }
+});
+test("optional Mac offline responses do not flood diagnostics or hide Phone failures", async () => {
+  const f = await fixture(); try {
+    const admin = await f.login();
+    for (const path of MAC_ROUTES) {
+      const result = await f.request(path);
+      assert.equal(result.status, 503); assert.equal(result.data.error, "offline");
+      assert.ok(result.headers.get("x-echo-request-id"));
+    }
+    const health = (await f.request("/healthz")).data;
+    assert.equal(health.ok, true); assert.equal(health.echo, "offline");
+    let overview = (await f.request("/admin/api/overview", admin)).data;
+    assert.equal(overview.mac.online, false); assert.equal(overview.requests.requests, MAC_ROUTES.size);
+    assert.equal(overview.requests.failures, 0); assert.equal(overview.problems.length, 0);
+    const phone = (await f.request("/phone/session", { body: {} })).data;
+    assert.equal((await f.request("/cloud/account", { pass: phone.cloudPass })).status, 200);
+    assert.equal((await f.request("/cloud/chat", { body: { text: "hello" }, pass: phone.cloudPass })).status, 503);
+    overview = (await f.request("/admin/api/overview", admin)).data;
+    assert.equal(overview.requests.failures, 1); assert.equal(overview.problems.length, 1);
+    assert.equal(overview.problems[0].operation, "/cloud/chat"); assert.equal(overview.problems[0].code, "setup");
+  } finally { await f.close(); }
+});
+test("real timeouts on previously unclassified Mac routes stay visible", async () => {
+  const f = await fixture({ pollMs: 5, requestMs: 20 }); try {
+    const admin = await f.login();
+    assert.equal((await fetch(f.base + "/agent/poll", { headers: { authorization: `Bearer ${SECRET}` } })).status, 204);
+    // /pending previously appeared as Other request; its real timeout must
+    // still count as a failure even though ordinary offline polls no longer do.
+    assert.equal((await f.request("/pending")).status, 504);
+    const overview = (await f.request("/admin/api/overview", admin)).data;
+    assert.equal(overview.requests.failures, 1); assert.equal(overview.problems.length, 1);
+    assert.equal(overview.problems[0].operation, "Mac /pending"); assert.equal(overview.problems[0].status, 504);
   } finally { await f.close(); }
 });
 test("suspended accounts receive no due reminders and reject calendar uploads; resuming preserves their tasks", async () => {
