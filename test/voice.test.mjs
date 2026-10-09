@@ -38,6 +38,31 @@ test("long utterances remain below the voice endpoint limit", () => {
   assert.ok(seconds >= 55 && seconds < 56);
   assert.ok(44 + seconds * 16000 * 2 < 2_200_000);
 });
+test("quiet phone speech is sent after a pause without sending ambient noise", () => {
+  const detector = new Segmenter(16000), results = [];
+  const push = (level) => { const result = detector.push(frame(level)); if (result) results.push(result); };
+  for (let i = 0; i < 100; i++) push(.0015);
+  assert.equal(results.length, 0);
+  for (let i = 0; i < 8; i++) push(.006);
+  for (let i = 0; i < 16; i++) push(.0015);
+  assert.equal(results.length, 1);
+  assert.ok(results[0].some((chunk) => chunk[0] > .005));
+  for (let i = 0; i < 100; i++) push(.0015);
+  assert.equal(results.length, 1);
+});
+test("a pause over background sound ends a louder utterance and later turns still work", () => {
+  const detector = new Segmenter(16000), results = [];
+  const push = (level) => { const result = detector.push(frame(level)); if (result) results.push(result); };
+  for (let i = 0; i < 8; i++) push(.1);
+  // This background level exceeded the former .014 cutoff, so a pause never ended.
+  for (let i = 0; i < 20; i++) push(.016);
+  assert.equal(results.length, 1);
+  for (let i = 0; i < 100; i++) push(.016);
+  assert.equal(results.length, 1);
+  for (let i = 0; i < 8; i++) push(.08);
+  for (let i = 0; i < 20; i++) push(.016);
+  assert.equal(results.length, 2);
+});
 
 test("one voice session handles multiple turns and excludes audio while answering", async () => {
   let push, finish, turns = 0, closes = 0;
@@ -89,4 +114,17 @@ test("permission denial, microphone interruption and unsuccessful replies leave 
   assert.equal(session.state, "off"); assert.equal(closes, 1);
   await session.start(); interrupt(new Error("Interrupted"));
   assert.equal(session.state, "off"); assert.equal(closes, 2);
+});
+test("a mic with no audio callbacks fails clearly and closes; a silent working mic stays available", async () => {
+  let closes = 0, error, push;
+  const session = new Session({ frameTimeoutMs: 20,
+    acquire: async (input) => { push = input; return { rate: 16000, close: () => closes++ }; },
+    onError: (e) => { error = e; },
+  });
+  await session.start(); await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(session.state, "off"); assert.equal(closes, 1); assert.match(error.message, /isn't delivering audio/);
+  error = null; await session.start(); push(frame());
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(session.state, "listening"); assert.equal(error, null);
+  session.stop(); assert.equal(closes, 2);
 });

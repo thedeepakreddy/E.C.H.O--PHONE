@@ -2,15 +2,22 @@
    while Echo is answering. No silence recordings or background microphone. */
 (() => {
   class Segmenter {
-    constructor(rate, { silence = 1.4, minimum = .25, maximum = 55, threshold = .014 } = {}) {
+    constructor(rate, { silence = 1.4, minimum = .25, maximum = 55, threshold = null } = {}) {
       Object.assign(this, { rate, silence, minimum, maximum, threshold });
+      this.noiseFloor = .001;
       this.reset();
     }
-    reset() { this.chunks = []; this.pre = []; this.voiced = 0; this.quiet = 0; this.duration = 0; }
+    reset() { this.chunks = []; this.pre = []; this.voiced = 0; this.quiet = 0; this.duration = 0; this.peak = 0; }
     push(samples) {
       const frame = new Float32Array(samples), seconds = frame.length / this.rate;
       const rms = Math.sqrt(frame.reduce((sum, value) => sum + value * value, 0) / frame.length);
-      const speech = rms >= this.threshold;
+      // A fixed .014 cutoff missed low-gain phone microphones. Learn the
+      // quiet level, with a small absolute floor to reject digital silence.
+      // After speech starts, also recognise a drop relative to its volume.
+      const cutoff = this.threshold ?? Math.max(.0025, this.noiseFloor * 2.2, Math.min(.02, this.peak * .18));
+      const speech = rms >= cutoff;
+      if (speech) this.peak = Math.max(this.peak, rms);
+      else this.noiseFloor += (rms - this.noiseFloor) * (1 - Math.exp(-seconds / (rms < this.noiseFloor ? .2 : 2)));
       if (!this.chunks.length && !speech) {
         this.pre.push(frame);
         // Preserve the first syllable without keeping an unbounded silence buffer.
@@ -28,8 +35,8 @@
   }
 
   class Session {
-    constructor({ acquire, onTurn, onState, onError }) {
-      Object.assign(this, { acquire, onTurn, onState, onError });
+    constructor({ acquire, onTurn, onState, onError, frameTimeoutMs = 5000 }) {
+      Object.assign(this, { acquire, onTurn, onState, onError, frameTimeoutMs });
       this.state = "off"; this.generation = 0; this.mic = null;
     }
     get active() { return this.state !== "off"; }
@@ -46,16 +53,24 @@
         if (generation !== this.generation) { mic.close(); return; }
         this.mic = mic; this.segmenter = new Segmenter(mic.rate); this.cooldown = 0;
         this.phase("listening");
+        // A running AudioContext can still produce no capture callbacks on
+        // an interrupted phone audio route. Don't leave a dead mic listening.
+        this.frameTimer = setTimeout(() => {
+          if (generation === this.generation) this.fail(new Error("The microphone isn't delivering audio. Check microphone access, disconnect Bluetooth if needed, then tap Listen again."));
+        }, this.frameTimeoutMs);
       } catch (error) { if (generation === this.generation) this.fail(error); }
     }
     stop() {
       ++this.generation;
+      clearTimeout(this.frameTimer); this.frameTimer = null;
       this.mic?.close(); this.mic = null; this.segmenter?.reset();
       this.phase("off");
     }
     fail(error) { this.stop(); this.onError?.(error); }
     frame(samples) {
       if (this.state !== "listening" || !this.mic) return;
+      if (!samples.length) return;
+      clearTimeout(this.frameTimer); this.frameTimer = null;
       if (this.cooldown > 0) { this.cooldown -= samples.length / this.mic.rate; return; }
       const chunks = this.segmenter.push(samples);
       if (!chunks) return;

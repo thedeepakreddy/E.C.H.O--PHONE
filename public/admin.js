@@ -139,5 +139,5 @@
   $("logout").addEventListener("click", async () => { try { await api("logout", {}); showLogin(); $("login-note").textContent = "Signed out."; } catch (e) { toast(e.message); } });
   setInterval(() => { if (!document.hidden && csrf) void refresh(); }, 30_000);
   window.addEventListener("pageshow", () => { if (csrf) void refresh(); });
-  api("session").then((s) => { if (s.authenticated) return openConsole(s); $("login-note").textContent = s.configured ? "Use the owner password. Normal Echo accounts cannot open admin." : "Admin access is not configured. Set ECHO_ADMIN_PASSWORD on Render to a private password of at least 24 characters."; }).catch((e) => { $("login-note").textContent = e.message; });
+  api("session").then((s) => { if (s.authenticated) return openConsole(s); $("login-note").textContent = s.configured ? "Use the owner password. Normal Echo accounts cannot open admin." : s.message || "Admin access is not configured. Set ECHO_ADMIN_PASSWORD on Render to a private password of at least 24 characters."; }).catch((e) => { $("login-note").textContent = e.message; });
 })();

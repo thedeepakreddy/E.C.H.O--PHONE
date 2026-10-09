@@ -53,6 +53,21 @@ test("admin login rate limits guesses; sessions expire and logout revokes the co
     assert.equal((await f.request("/admin/api/overview", second)).status, 401);
   } finally { await f.close(); }
 });
+test("admin setup distinguishes a missing password from a short one and accepts exactly 24 characters", async () => {
+  for (const password of ["", "short-test-password", "a".repeat(24)]) {
+    const f = await fixture({ password }); try {
+      const result = await f.request("/admin/api/session");
+      const valid = password.length >= 24;
+      assert.equal(result.data.configured, valid);
+      assert.equal(result.data.configurationError, valid ? undefined : password ? "password_too_short" : "password_missing");
+      const login = await f.request("/admin/api/login", { body: { password } });
+      assert.equal(login.status, valid ? 200 : 503);
+      if (!valid) assert.equal(login.data.message, result.data.message);
+      if (password && !valid) assert.match(login.data.message, /saved on Render is too short/);
+      assert.equal(JSON.stringify(result.data).includes("short-test-password"), false);
+    } finally { await f.close(); }
+  }
+});
 test("management rejects CSRF and suspension blocks existing Phone credentials, recovery and browser sessions", async () => {
   const f = await fixture(); try {
     const phone = (await f.request("/phone/session", { body: {} })).data, other = (await f.request("/phone/session", { body: {} })).data;
