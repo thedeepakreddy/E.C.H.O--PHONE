@@ -1506,7 +1506,7 @@
   }
 
   // ---------- weather ----------
-  const WMO = { 0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Cloudy", 45: "Fog", 48: "Fog", 51: "Drizzle", 53: "Drizzle", 55: "Drizzle", 61: "Rain", 63: "Rain", 65: "Heavy rain", 71: "Snow", 73: "Snow", 75: "Heavy snow", 80: "Showers", 81: "Showers", 82: "Heavy showers", 95: "Thunderstorm", 96: "Thunderstorm", 99: "Thunderstorm" };
+  const WMO = { 0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Cloudy", 45: "Fog", 48: "Fog", 51: "Drizzle", 53: "Drizzle", 55: "Drizzle", 61: "Rain", 63: "Rain", 65: "Heavy rain", 68: "Sleet", 69: "Heavy sleet", 71: "Snow", 73: "Snow", 75: "Heavy snow", 80: "Showers", 81: "Showers", 82: "Heavy showers", 85: "Snow showers", 86: "Heavy snow showers", 95: "Thunderstorm", 96: "Thunderstorm", 99: "Thunderstorm" };
   function place() { try { return JSON.parse(store.get("echo_place") || "null"); } catch { return null; } }
   function weatherIcon(code, day) {
     const NS = "http://www.w3.org/2000/svg", svg = document.createElementNS(NS, "svg"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("class", "w-icon");
@@ -1525,8 +1525,8 @@
       const w = await pub(`/weather?lat=${pl.lat}&lon=${pl.lon}`);
       $("w-place").textContent = pl.name;
       $("w-temp").textContent = `${Math.round(w.temp)}°`;
-      const ic = $("w-icon"); clear(ic); ic.appendChild(weatherIcon(w.code, w.isDay));
-      $("w-detail").textContent = `${WMO[w.code] || "—"} · H ${Math.round(w.high)}° L ${Math.round(w.low)}° · feels ${Math.round(w.feels)}°`;
+      const ic = $("w-icon"); clear(ic); ic.appendChild(weatherIcon(w.code ?? 3, w.isDay));
+      $("w-detail").textContent = `${WMO[w.code] || "—"} · ${w.forecastPeriod === "next_24_hours" ? "Next 24h · " : ""}H ${Math.round(w.high)}° L ${Math.round(w.low)}°${Number.isFinite(w.feels) ? ` · feels ${Math.round(w.feels)}°` : ""}`;
     } catch { $("w-detail").textContent = "Weather unavailable right now"; }
     clearTimeout(timers.weather); timers.weather = setTimeout(loadWeather, 10 * 60_000);
   }
@@ -3122,7 +3122,7 @@
     clear(box);
     if (!b) { const l = el("div", "glass list"); l.appendChild(el("p", "sub empty", "Getting today's briefing…")); box.appendChild(l); return; }
     box.appendChild(el("p", "brief-date", `${new Date(b.at).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })} · ${clock(b.at)}`));
-    if (b.weather) box.appendChild(bcard(b.place || "Weather", el("div", "big", `${b.weather.temp}° ${b.weather.text}`), el("p", "sub small", `High ${b.weather.high}°, low ${b.weather.low}°.${b.weather.tip ? ` ${b.weather.tip}` : ""}`)));
+    if (b.weather) box.appendChild(bcard(b.place || "Weather", el("div", "big", `${b.weather.temp}° ${b.weather.text}`), el("p", "sub small", `${b.weather.forecastPeriod === "next_24_hours" ? "Next 24 hours: " : ""}High ${b.weather.high}°, low ${b.weather.low}°.${b.weather.tip ? ` ${b.weather.tip}` : ""}`)));
     else box.appendChild(bcard("Weather", el("p", "sub small", b.place ? "Weather isn't available right now." : "Set your weather location in Settings for weather and nearby alerts.")));
     const asOf = b.macAsOf ? el("p", "fine", `From your Mac, as of ${clock(b.macAsOf)}${new Date(b.macAsOf).toDateString() !== new Date(b.at).toDateString() ? " yesterday" : ""}`) : null;
     const calFrom = b.calendarFrom === "iphone" ? el("p", "fine", `From your iPhone at ${clock(b.calendarAt)}`) : asOf;

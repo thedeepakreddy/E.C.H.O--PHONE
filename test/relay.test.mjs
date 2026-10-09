@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { createRelay, summariseWorld, LOGIN_LIMIT } from "../server.js";
+import { metWeather } from "../lib/weather.js";
 
 const SECRET = "s".repeat(48);
 
@@ -191,9 +192,10 @@ test("/world is cached, and a failed refresh keeps the last good copy", async ()
 });
 
 test("/weather checks its coordinates", async () => {
-  const r = await start({ fetchJson: async () => ({ current: { temperature_2m: 15, is_day: 0 }, daily: { temperature_2m_max: [20] } }) });
+  const r = await start({ fetchJson: async () => ({ current: { temperature_2m: 15, is_day: 0 }, daily: { temperature_2m_max: [20], temperature_2m_min: [10] } }) });
   try {
-    assert.equal((await fetch(r.base + "/weather?lat=999&lon=0")).status, 400);
+    for (const query of ["lat=999&lon=0", "lat=0", "lon=0", "lat=&lon=0", "lat=NaN&lon=0"]) assert.equal((await fetch(r.base + `/weather?${query}`)).status, 400);
+    assert.equal((await fetch(r.base + "/weather?lat=0&lon=0")).status, 200);
     const w = await fetch(r.base + "/weather?lat=47.5&lon=19.04").then((x) => x.json());
     assert.equal(w.temp, 15);
     assert.equal(w.isDay, false);
@@ -205,7 +207,7 @@ test("weather retries a temporary failure once and shares concurrent requests wi
   const r = await start({ fetchJson: async () => {
     calls++;
     if (calls === 1) throw Object.assign(new Error("temporary provider failure"), { status: 503 });
-    return { current: { temperature_2m: 15 }, daily: { temperature_2m_max: [20] } };
+    return { current: { temperature_2m: 15 }, daily: { temperature_2m_max: [20], temperature_2m_min: [10] } };
   } });
   try {
     const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(r.base + "/weather?lat=47.5&lon=19.04")));
@@ -214,16 +216,54 @@ test("weather retries a temporary failure once and shares concurrent requests wi
     await fetch(r.base + "/weather?lat=47.5&lon=19.04"); assert.equal(calls, 2);
   } finally { await r.close(); }
 });
-test("weather does not retry provider quota errors and can recover on a later request", async () => {
-  let calls = 0, limited = true;
-  const r = await start({ fetchJson: async () => {
-    calls++;
-    if (limited) throw Object.assign(new Error("private provider response"), { status: 429 });
-    return { current: { temperature_2m: 15 }, daily: { temperature_2m_max: [20] } };
+const weatherTime = Date.parse("2026-10-09T12:00:00Z");
+function metFixture(time = weatherTime, symbol = "partlycloudy_day") {
+  return { properties: { meta: { units: { air_temperature: "celsius", wind_speed: "m/s" } },
+    timeseries: Array.from({ length: 25 }, (_, i) => ({ time: new Date(time + i * 3600_000).toISOString(),
+      data: { instant: { details: { air_temperature: i === 0 ? 15 : i === 24 ? 22 : 10, wind_speed: 5, relative_humidity: 60 } },
+        next_1_hours: { summary: { symbol_code: symbol } } } })) } };
+}
+test("weather uses cached backup during quota cooldown, respects Expires and recovers the primary later", async () => {
+  let time = weatherTime, primary = 0, backup = 0, limited = true;
+  const r = await start({ now: () => time, fetchJson: async (url, options) => {
+    if (url.includes("api.met.no")) {
+      backup++; assert.equal(options.metadata, true); assert.match(url, /lat=47\.50&lon=19\.04$/);
+      return { data: metFixture(time), expiresAt: time + 20 * 60_000 };
+    }
+    primary++;
+    if (limited) throw Object.assign(new Error("private provider response"), { status: 429, retryAfterMs: 30 * 60_000 });
+    return { current: { temperature_2m: 16 }, daily: { temperature_2m_max: [20], temperature_2m_min: [10] } };
   } });
   try {
-    assert.equal((await fetch(r.base + "/weather?lat=47.5&lon=19.04")).status, 502); assert.equal(calls, 1);
+    const request = () => fetch(r.base + "/weather?lat=47.5&lon=19.04");
+    const first = await request(); assert.equal(first.status, 200); const value = await first.json();
+    assert.equal(value.source, "MET Norway"); assert.equal(value.forecastPeriod, "next_24_hours");
+    assert.equal(value.feels, null); assert.equal(value.wind, 18); assert.equal(primary, 1); assert.equal(backup, 1);
+    time += 11 * 60_000; await request(); assert.equal(backup, 1, "respect provider expiry even after the normal ten-minute TTL");
+    time += 10 * 60_000; await request(); assert.equal(primary, 1); assert.equal(backup, 2, "do not hammer a rate-limited primary");
     limited = false;
-    assert.equal((await fetch(r.base + "/weather?lat=47.5&lon=19.04")).status, 200); assert.equal(calls, 2);
+    time += 21 * 60_000;
+    const recovered = await request(); assert.equal(recovered.status, 200); assert.equal((await recovered.json()).temp, 16); assert.equal(primary, 2);
+  } finally { await r.close(); }
+});
+test("MET weather preserves units, night icons and forecast scope, and rejects missing or outdated data", () => {
+  const value = metWeather(metFixture(weatherTime, "clearsky_night"), weatherTime);
+  assert.equal(value.code, 0); assert.equal(value.isDay, false); assert.equal(value.high, 22); assert.equal(value.low, 10);
+  assert.equal(value.forecastPeriod, "next_24_hours"); assert.equal(value.feels, null);
+  assert.equal(metWeather(metFixture(weatherTime, "lightsleetshowers_day"), weatherTime).code, 68);
+  assert.equal(metWeather(metFixture(weatherTime, "lightrainandthunder_day"), weatherTime).code, 95);
+  assert.throws(() => metWeather({}, weatherTime), /Invalid weather/);
+  assert.throws(() => metWeather(metFixture(), weatherTime + 48 * 3600_000), /Invalid weather/);
+  const short = metFixture(); short.properties.timeseries.length = 2;
+  assert.throws(() => metWeather(short, weatherTime), /Invalid weather/);
+});
+test("weather reports genuine failure if both sources fail, without leaking provider error text", async () => {
+  let calls = 0;
+  const r = await start({ fetchJson: async () => { calls++; throw Object.assign(new Error("private provider error"), { status: 429 }); } });
+  try {
+    const response = await fetch(r.base + "/weather?lat=47.5&lon=19.04");
+    assert.equal(response.status, 502); assert.equal((await response.json()).error, "Weather is unavailable right now.");
+    assert.equal((await fetch(r.base + "/weather?lat=48.5&lon=20.04")).status, 502);
+    assert.equal(calls, 2, "respect both providers' rate limits across locations");
   } finally { await r.close(); }
 });

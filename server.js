@@ -39,6 +39,7 @@ import { deriveKeys, signPass, verifyPass, seal, unseal } from "./lib/secure.js"
 import { createStore } from "./lib/store.js";
 import { createAdmin } from "./lib/admin.js";
 import { MAC_ROUTES } from "./lib/mac-routes.js";
+import { metWeather, invalidWeather } from "./lib/weather.js";
 import { createGemini, pickBrowseModels } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
@@ -313,6 +314,7 @@ export function createRelay({
   let world = null, worldAt = 0, worldLoading = null;
   const weatherCache = new Map();
   const weatherLoading = new Map();
+  let weatherRetryAt = 0, weatherBackupRetryAt = 0;
 
   async function getWorld() {
     if (world && now() - worldAt < WORLD_TTL_MS) return world;
@@ -337,7 +339,7 @@ export function createRelay({
   async function getWeather(lat, lon) {
     const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
     const hit = weatherCache.get(key);
-    if (hit && now() - hit.at < 10 * 60_000) return hit.value;
+    if (hit && now() < hit.freshUntil) return hit.value;
     if (weatherLoading.has(key)) return weatherLoading.get(key);
     const q = new URLSearchParams({
       latitude: String(lat), longitude: String(lon), timezone: "auto", forecast_days: "1",
@@ -345,24 +347,43 @@ export function createRelay({
       daily: "temperature_2m_max,temperature_2m_min",
     });
     const load = (async () => {
-      let d;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try { d = await fetchJson(`https://api.open-meteo.com/v1/forecast?${q}`); break; }
+      let value, freshUntil = now() + 10 * 60_000;
+      for (let attempt = 0; now() >= weatherRetryAt && attempt < 2; attempt++) {
+        try {
+          const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?${q}`);
+          value = {
+            temp: d?.current?.temperature_2m, feels: d?.current?.apparent_temperature, humidity: d?.current?.relative_humidity_2m,
+            code: d?.current?.weather_code, wind: d?.current?.wind_speed_10m, isDay: d?.current?.is_day === 1,
+            high: d?.daily?.temperature_2m_max?.[0], low: d?.daily?.temperature_2m_min?.[0], timezone: d?.timezone ?? null,
+          };
+          if (![value.temp, value.high, value.low].every(Number.isFinite)) { value = null; throw invalidWeather(); }
+          break;
+        }
         catch (e) {
           // Never log coordinates, URLs or provider response text.
           const upstreamStatus = Number.isInteger(e?.status) ? e.status : null;
-          const code = e?.name === "TimeoutError" || e?.name === "AbortError" ? "timeout" : upstreamStatus ? "http" : "network";
+          const code = e?.name === "WeatherDataError" ? "invalid_data" : e?.name === "TimeoutError" || e?.name === "AbortError" ? "timeout" : upstreamStatus ? "http" : "network";
           if (attempt === 0 && (upstreamStatus === null || upstreamStatus >= 500)) { await new Promise((r) => setTimeout(r, 500)); continue; }
           console.warn(JSON.stringify({ event: "echo_weather_provider_failed", provider: "open-meteo", status: upstreamStatus, code }));
+          if (upstreamStatus === 429) weatherRetryAt = now() + Math.max(15 * 60_000, e.retryAfterMs || 0);
+          break;
+        }
+      }
+      if (!value) {
+        if (now() < weatherBackupRetryAt) throw Object.assign(new Error("Weather backup is rate-limited."), { status: 429 });
+        try {
+          const reply = await fetchJson(`https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat.toFixed(2)}&lon=${lon.toFixed(2)}`, { metadata: true });
+          value = metWeather(reply.data ?? reply, now());
+          // Respect MET's Expires header; never refresh earlier than it asks.
+          freshUntil = Math.max(now() + 10 * 60_000, Number.isFinite(reply.expiresAt) ? reply.expiresAt : now() + 30 * 60_000);
+        } catch (e) {
+          if (e?.status === 429) weatherBackupRetryAt = now() + Math.max(60_000, e.retryAfterMs || 0);
+          console.warn(JSON.stringify({ event: "echo_weather_provider_failed", provider: "met-norway", status: Number.isInteger(e?.status) ? e.status : null,
+            code: e?.name === "WeatherDataError" ? "invalid_data" : e?.status ? "http" : "network" }));
           throw e;
         }
       }
-      const value = {
-        temp: d?.current?.temperature_2m, feels: d?.current?.apparent_temperature, humidity: d?.current?.relative_humidity_2m,
-        code: d?.current?.weather_code, wind: d?.current?.wind_speed_10m, isDay: d?.current?.is_day === 1,
-        high: d?.daily?.temperature_2m_max?.[0], low: d?.daily?.temperature_2m_min?.[0], timezone: d?.timezone ?? null,
-      };
-      weatherCache.set(key, { at: now(), value });
+      weatherCache.set(key, { freshUntil, value });
       if (weatherCache.size > 500) weatherCache.delete(weatherCache.keys().next().value);
       return value;
     })().finally(() => weatherLoading.delete(key));
@@ -1273,9 +1294,13 @@ export function createRelay({
         .catch((e) => send(res, 502, { error: String(e.message ?? e) }));
     }
     if (path === "/weather" && req.method === "GET") {
-      const lat = Number(url.searchParams.get("lat")), lon = Number(url.searchParams.get("lon"));
-      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return send(res, 400, { error: "lat and lon are required" });
-      return void getWeather(lat, lon).then((w) => send(res, 200, w)).catch(() => send(res, 502, { error: "Weather is unavailable right now." }));
+      const rawLat = url.searchParams.get("lat"), rawLon = url.searchParams.get("lon");
+      const lat = Number(rawLat), lon = Number(rawLon);
+      if (!rawLat?.trim() || !rawLon?.trim() || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return send(res, 400, { error: "lat and lon are required" });
+      return void getWeather(lat, lon).then((w) => send(res, 200, w)).catch((e) => {
+        res.adminErrorCode = e?.status === 429 || now() < weatherRetryAt ? "weather_rate_limit" : "weather_unavailable";
+        send(res, 502, { error: "Weather is unavailable right now." });
+      });
     }
     if (path === "/geocode" && req.method === "GET") {
       const name = String(url.searchParams.get("q") ?? "").trim().slice(0, 80);
@@ -1303,10 +1328,14 @@ export function createRelay({
   return { handler, keys, tick, vapid, state: () => ({ online: online(), queued: queue.length, waiting: waiters.length, inFlight: inFlight.size, passGen }) };
 }
 
-async function defaultFetchJson(url) {
-  const res = await fetch(url, { headers: { accept: "application/json", "user-agent": "EchoRemote/1.0 (+personal relay)" }, signal: AbortSignal.timeout(15_000) });
-  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
-  return res.json();
+async function defaultFetchJson(url, { metadata = false } = {}) {
+  const res = await fetch(url, { headers: { accept: "application/json", "user-agent": "EchoRemote/1.0 (+https://github.com/thedeepakreddy/E.C.H.O--PHONE)" }, signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) {
+    const retry = res.headers.get("retry-after"), delay = /^\d+$/.test(retry ?? "") ? Number(retry) * 1000 : Date.parse(retry) - Date.now();
+    throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status, retryAfterMs: Number.isFinite(delay) ? Math.max(0, delay) : 0 });
+  }
+  const data = await res.json();
+  return metadata ? { data, expiresAt: Date.parse(res.headers.get("expires")) } : data;
 }
 
 // Started directly (Render runs `npm start`): listen. Imported by tests: don't.
