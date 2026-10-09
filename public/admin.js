@@ -1,6 +1,9 @@
 /* Admin credentials stay in an HttpOnly session cookie; only its CSRF token lives in this page. */
 (() => {
   const $ = (id) => document.getElementById(id);
+  // Reuse Echo's existing visual components; this script is loaded only by Admin.
+  for (const e of document.querySelectorAll(".panel, dialog, #toast")) e.classList.add("glass");
+  for (const e of document.querySelectorAll("button")) e.classList.add(e.classList.contains("primary") ? "cta" : "glass");
   let csrf = "", generation = 0, data = null, page = "overview", usersPage = 0, selectedUser = null, pendingAction = null, refreshing = false;
   const labels = { suspend: "Suspend Phone access", resume: "Restore Phone access", disable_notifications: "Disconnect notifications", reset_recovery: "Revoke recovery key" };
   const descriptions = {
@@ -9,7 +12,7 @@
     disable_notifications: "Disconnect every push subscription on this account. Users can enable notifications again from their phones. Tasks and reminders are kept.",
     reset_recovery: "The existing recovery key will stop working. Signed-in phones remain connected and can create a new key. A user without another signed-in phone could lose access.",
   };
-  const node = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
+  const node = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; if (tag === "button") e.classList.add(e.classList.contains("primary") ? "cta" : "glass"); return e; };
   const date = (t) => t ? new Date(t).toLocaleString() : "Not recorded";
   const empty = (container, message) => container.replaceChildren(node("p", message, "empty"));
   function notice(message = "") { $("notice").textContent = message; $("notice").hidden = !message; }
@@ -39,7 +42,7 @@
     if (next === "users") void loadUsers();
   }
   document.querySelectorAll("[data-page]").forEach((b) => b.addEventListener("click", () => showPage(b.dataset.page)));
-  function stat(value, label, detail) { const e = node("div", null, "stat"); e.append(node("strong", String(value)), node("p", label), node("span", detail, "muted")); return e; }
+  function stat(value, label, detail) { const e = node("div", null, "stat glass"); e.append(node("strong", String(value)), node("p", label), node("span", detail, "muted")); return e; }
   function connection(title, description, state, tone = "") {
     const e = node("div", null, "connection"), text = node("div"); text.append(node("b", title), node("p", description, "muted")); e.append(text, node("span", state, `badge ${tone}`)); return e;
   }

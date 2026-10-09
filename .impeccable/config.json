@@ -47,6 +47,34 @@
         ],
         "createdAt": "2026-10-08T00:32:28.467Z",
         "reason": "Agent: these matches are grouped form controls and fields within the existing liquid-glass panels, not nested independent content cards; onboarding preserves the committed material hierarchy."
+      },
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "public/admin.css",
+          "public/admin.html"
+        ],
+        "createdAt": "2026-10-09T03:42:07.817Z",
+        "reason": "User confirmed Admin must match the existing Echo glass and cyan glow styling; reuse the unchanged app.css components."
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "public/admin.html"
+        ],
+        "createdAt": "2026-10-09T03:42:07.882Z",
+        "reason": "Agent: scanner follows the shared app.css typing indicator, but Admin renders no typing dots; original main app CSS must remain unchanged."
+      },
+      {
+        "rule": "kicker-above-heading",
+        "value": "*",
+        "files": [
+          "public/admin.html"
+        ],
+        "createdAt": "2026-10-09T03:42:07.947Z",
+        "reason": "User requested style matching without changing UI content or layout; preserve existing owner and app context labels in the Admin page."
       }
     ]
   }

@@ -3,20 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#071014">
+  <meta name="theme-color" content="#02070a">
   <meta name="robots" content="noindex, nofollow">
   <title>Echo · Admin</title>
   <link rel="icon" href="/icons/icon-192.png?v=7">
+  <link rel="stylesheet" href="/app.css">
   <link rel="stylesheet" href="/admin.css">
   <script src="/admin.js" defer></script>
 </head>
-<body>
+<body class="admin-page">
+  <div aria-hidden="true" class="ambient"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span></div>
   <header class="masthead">
     <a class="brand" href="/"><img src="/icons/icon-192.png?v=7" width="38" height="38" alt=""><span>E.C.H.O <small>ADMIN</small></span></a>
     <div class="header-actions"><a href="/">Back to Echo ↗</a><button id="logout" hidden>Sign out</button></div>
   </header>
   <main>
-    <section id="login-view" class="login-card">
+    <section id="login-view" class="login-card glass">
       <p class="eyebrow">OWNER ACCESS</p><h1>A clearer view of Echo.</h1>
       <p class="muted">Find problems, check connections and look after your users.</p>
       <form id="login-form">
