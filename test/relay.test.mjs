@@ -200,3 +200,30 @@ test("/weather checks its coordinates", async () => {
     assert.equal(w.high, 20);
   } finally { await r.close(); }
 });
+test("weather retries a temporary failure once and shares concurrent requests with its cache", async () => {
+  let calls = 0;
+  const r = await start({ fetchJson: async () => {
+    calls++;
+    if (calls === 1) throw Object.assign(new Error("temporary provider failure"), { status: 503 });
+    return { current: { temperature_2m: 15 }, daily: { temperature_2m_max: [20] } };
+  } });
+  try {
+    const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(r.base + "/weather?lat=47.5&lon=19.04")));
+    for (const response of responses) { assert.equal(response.status, 200); assert.equal((await response.json()).temp, 15); }
+    assert.equal(calls, 2);
+    await fetch(r.base + "/weather?lat=47.5&lon=19.04"); assert.equal(calls, 2);
+  } finally { await r.close(); }
+});
+test("weather does not retry provider quota errors and can recover on a later request", async () => {
+  let calls = 0, limited = true;
+  const r = await start({ fetchJson: async () => {
+    calls++;
+    if (limited) throw Object.assign(new Error("private provider response"), { status: 429 });
+    return { current: { temperature_2m: 15 }, daily: { temperature_2m_max: [20] } };
+  } });
+  try {
+    assert.equal((await fetch(r.base + "/weather?lat=47.5&lon=19.04")).status, 502); assert.equal(calls, 1);
+    limited = false;
+    assert.equal((await fetch(r.base + "/weather?lat=47.5&lon=19.04")).status, 200); assert.equal(calls, 2);
+  } finally { await r.close(); }
+});

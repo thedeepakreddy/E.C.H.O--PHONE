@@ -312,6 +312,7 @@ export function createRelay({
   const logins = new Map();
   let world = null, worldAt = 0, worldLoading = null;
   const weatherCache = new Map();
+  const weatherLoading = new Map();
 
   async function getWorld() {
     if (world && now() - worldAt < WORLD_TTL_MS) return world;
@@ -337,20 +338,36 @@ export function createRelay({
     const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
     const hit = weatherCache.get(key);
     if (hit && now() - hit.at < 10 * 60_000) return hit.value;
+    if (weatherLoading.has(key)) return weatherLoading.get(key);
     const q = new URLSearchParams({
       latitude: String(lat), longitude: String(lon), timezone: "auto", forecast_days: "1",
       current: "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day",
       daily: "temperature_2m_max,temperature_2m_min",
     });
-    const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?${q}`);
-    const value = {
-      temp: d?.current?.temperature_2m, feels: d?.current?.apparent_temperature, humidity: d?.current?.relative_humidity_2m,
-      code: d?.current?.weather_code, wind: d?.current?.wind_speed_10m, isDay: d?.current?.is_day === 1,
-      high: d?.daily?.temperature_2m_max?.[0], low: d?.daily?.temperature_2m_min?.[0], timezone: d?.timezone ?? null,
-    };
-    weatherCache.set(key, { at: now(), value });
-    if (weatherCache.size > 500) weatherCache.delete(weatherCache.keys().next().value);
-    return value;
+    const load = (async () => {
+      let d;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try { d = await fetchJson(`https://api.open-meteo.com/v1/forecast?${q}`); break; }
+        catch (e) {
+          // Never log coordinates, URLs or provider response text.
+          const upstreamStatus = Number.isInteger(e?.status) ? e.status : null;
+          const code = e?.name === "TimeoutError" || e?.name === "AbortError" ? "timeout" : upstreamStatus ? "http" : "network";
+          if (attempt === 0 && (upstreamStatus === null || upstreamStatus >= 500)) { await new Promise((r) => setTimeout(r, 500)); continue; }
+          console.warn(JSON.stringify({ event: "echo_weather_provider_failed", provider: "open-meteo", status: upstreamStatus, code }));
+          throw e;
+        }
+      }
+      const value = {
+        temp: d?.current?.temperature_2m, feels: d?.current?.apparent_temperature, humidity: d?.current?.relative_humidity_2m,
+        code: d?.current?.weather_code, wind: d?.current?.wind_speed_10m, isDay: d?.current?.is_day === 1,
+        high: d?.daily?.temperature_2m_max?.[0], low: d?.daily?.temperature_2m_min?.[0], timezone: d?.timezone ?? null,
+      };
+      weatherCache.set(key, { at: now(), value });
+      if (weatherCache.size > 500) weatherCache.delete(weatherCache.keys().next().value);
+      return value;
+    })().finally(() => weatherLoading.delete(key));
+    weatherLoading.set(key, load);
+    return load;
   }
   const cloud = gemini ? createCloud({
     gemini, store, now, limits,
@@ -1288,7 +1305,7 @@ export function createRelay({
 
 async function defaultFetchJson(url) {
   const res = await fetch(url, { headers: { accept: "application/json", "user-agent": "EchoRemote/1.0 (+personal relay)" }, signal: AbortSignal.timeout(15_000) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
   return res.json();
 }
 
