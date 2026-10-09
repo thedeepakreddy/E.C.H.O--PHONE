@@ -730,21 +730,28 @@
     } catch (e) { close(); throw e; }
   }
   async function capture() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("This browser can't use the microphone.");
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ctx.createMediaStreamSource(stream);
-    const node = ctx.createScriptProcessor(4096, 1, 1);
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser can't use the microphone.");
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) throw new Error("Voice isn't supported in this browser.");
+    const ctx = new Audio();
+    let stream, src, node, closed = false;
     const chunks = [];
-    node.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    src.connect(node); node.connect(ctx.destination);
-    const startedAt = Date.now();
-    const end = () => { node.disconnect(); src.disconnect(); stream.getTracks().forEach((t) => t.stop()); ctx.close(); };
-    return {
-      startedAt,
-      cancel: end,
-      stop() { end(); return toWav(chunks, ctx.sampleRate, 16000); },
+    const end = () => {
+      if (closed) return;
+      closed = true;
+      if (node) { node.onaudioprocess = null; node.disconnect(); }
+      src?.disconnect(); stream?.getTracks().forEach((t) => t.stop()); ctx.close().catch(() => {});
     };
+    try {
+      // Resume from the Listen tap, before waiting for microphone permission.
+      await ctx.resume();
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+      src = ctx.createMediaStreamSource(stream);
+      node = ctx.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      src.connect(node); node.connect(ctx.destination);
+      return { startedAt: Date.now(), cancel: end, stop() { const wav = toWav(chunks, ctx.sampleRate, 16000); end(); return wav; } };
+    } catch (error) { end(); throw error; }
   }
   function toWav(chunks, rate, target) {
     const total = chunks.reduce((n, c) => n + c.length, 0);
@@ -829,7 +836,19 @@
     }
     const wav = homeRec.stop(); homeRec = null; btn.setAttribute("aria-pressed", "false");
     if (wav.byteLength < 44 + 16000) return toast("Too short — tap, speak, then tap again.", true);
-    try { await api("/voice", { body: wav }); voiceAskedAt = Date.now(); toast("Sent to Echo"); } catch { toast("Couldn't reach your Mac.", true); }
+    const generation = macRecordingGeneration;
+    const askedAt = voiceAskedAt = Date.now(); // arm replies before a fast answer can arrive
+    toast("Sending your voice to Echo…");
+    try {
+      const result = await api("/voice", { body: wav });
+      if (generation !== macRecordingGeneration || mode !== "mac" || document.hidden) return;
+      if (result.ok === false) throw new Error(result.error || "Your Mac couldn't hear that recording.");
+      toast(result.text ? "Echo heard you" : "Sent to Echo");
+    } catch (error) {
+      if (generation !== macRecordingGeneration) return;
+      if (voiceAskedAt === askedAt) voiceAskedAt = 0;
+      toast(error.message || "Couldn't reach your Mac.", true);
+    }
   });
 
   // ---------- replies read aloud on the phone ----------
@@ -868,7 +887,8 @@
     const d = await api(`/events?since=${eventsNext}`);
     eventsNext = d.nextIndex || eventsNext;
     for (const it of d.items || []) {
-      if (it.kind !== "reply" || firstEvents) continue;
+      if (it.kind !== "reply") continue;
+      if (firstEvents && !voiceAskedAt) continue;
       const text = String(it.line).replace(/^Echo:\s*/, "");
       if (mode === "mac") $("activity-line").textContent = text;
       // Spoken only when it answers this phone's own Listen, and the app is open;
