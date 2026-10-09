@@ -1,5 +1,10 @@
 # Echo Phone feature checklist
 
+## Full particle speech
+- [x] Implement complete, event-driven spoken phrases and queue cleanup.
+- [x] Render readable particle phrases throughout speech, including static words for reduced motion.
+- [x] Verify 102 regression tests and Chromium/WebKit mobile rendering: all nine phrases, complete long-word glyphs, no caption timeout and stale-callback cancellation. Prepare release for GitHub and Render.
+
 ## Continuous voice
 - [x] Add speech pause detection and a cancellable microphone session.
 - [x] Integrate Home/Chat turn-taking, humanoid tap controls, spoken replies and foreground/account cleanup.

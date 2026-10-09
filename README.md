@@ -66,6 +66,8 @@ Replies to anything sent from the phone come back to the phone only. Echo doesn'
 
 On Phone, tap Listen or either humanoid once to start a continuous voice conversation. A 1.4-second speech pause sends each turn, Echo reads the reply, then listens again. Tap Pause/Stop to end it. Voice also stops when you leave Echo/Chat, hide the app, change accounts or modes, or the microphone is interrupted. The composer still supports hold-to-record voice notes. The Mac's recording protocol is unchanged.
 
+Spoken replies stay in particle-word form throughout: short phrases are queued in the same voice, and speech start/end events advance their visuals. The last phrase briefly remains before the humanoid reforms. Stop cancels all remaining speech and releases its words immediately. Reduced motion displays static particle phrases; Chat retains the full written reply.
+
 ## Phone mode
 
 Tap the pill at the top right of the Echo page to choose where Echo runs:

@@ -296,7 +296,7 @@
        axis, measured from the centre of the stage */
     gazeX: 0, gazeY: 0, wantX: 0, wantY: 0,
     /* Speaking on the phone: the figure bursts apart (ex 0 → 1), some of its
-       particles spell the first words (ws 0 → 1, at `words` in figure units),
+       particles spell each spoken phrase (ws 0 → 1, at `words` in figure units),
        and it gathers back together afterwards (ex → 0). */
     ex: 0, exTarget: 0, ws: 0, wsTarget: 0, words: null, wordsN: 0
   };
@@ -340,7 +340,7 @@
     /* Out in under a second; back together at the pace of the opening. */
     var exRate = shared.exTarget > shared.ex ? dt / 900 : dt / 2100;
     shared.ex = shared.exTarget > shared.ex ? Math.min(shared.exTarget, shared.ex + exRate) : Math.max(shared.exTarget, shared.ex - exRate);
-    var wsRate = dt / 700;
+    var wsRate = dt / 320;
     shared.ws = shared.wsTarget > shared.ws ? Math.min(shared.wsTarget, shared.ws + wsRate) : Math.max(shared.wsTarget, shared.ws - wsRate);
     if (shared.ws === 0 && shared.wsTarget === 0) { shared.words = null; shared.wordsN = 0; }
 
@@ -437,9 +437,9 @@
       coreAmp *= assemble; dim *= 0.35 + 0.65 * assemble;
       /* Burst: the glass, veins and sparks belong to the figure, so they go
          with it; the scattered field stays bright. */
-      var ex = reduceMotion ? 0 : shared.ex;
+      var ex = reduceMotion ? (shared.words && shared.wsTarget ? 1 : 0) : shared.ex;
       var exE = ex * ex * (3 - 2 * ex);
-      var ws = shared.ws * shared.ws * (3 - 2 * shared.ws);
+      var ws = reduceMotion ? shared.wsTarget : shared.ws * shared.ws * (3 - 2 * shared.ws);
       var words = shared.words, wordsN = shared.wordsN;
       var perWord = words ? Math.max(1, Math.floor(n0 / stride / Math.max(1, wordsN))) : 0;
       coreAmp *= 1 - exE;
@@ -535,16 +535,16 @@
            there; the points chosen to spell take their place in the words. */
         var wordPt = false;
         if (exE > 0.001) {
-          var bx = csx[i] * 0.34 + fsin(t * 0.37 + ph) * 0.05;
-          var by = csy[i] * 0.34 + 0.12 + fsin(t * 0.29 + ph * 1.7) * 0.05;
+          var bx = csx[i] * 0.34 + (reduceMotion ? 0 : fsin(t * 0.37 + ph) * 0.05);
+          var by = csy[i] * 0.34 + 0.12 + (reduceMotion ? 0 : fsin(t * 0.29 + ph * 1.7) * 0.05);
           if (words && ws > 0.001) {
             var q = (i / stride) | 0;
             if (q % perWord === 0) {
               var j = (q / perWord) | 0;
               if (j < wordsN) {
                 var wl = clamp((ws - cst[i] * 0.3) / 0.7, 0, 1);
-                bx = lerp(bx, words[j * 2] + fsin(t * 2.1 + ph) * 0.004, wl);
-                by = lerp(by, words[j * 2 + 1] + fsin(t * 1.7 + ph) * 0.004, wl);
+                bx = lerp(bx, words[j * 2] + (reduceMotion ? 0 : fsin(t * 2.1 + ph) * 0.004), wl);
+                by = lerp(by, words[j * 2 + 1] + (reduceMotion ? 0 : fsin(t * 1.7 + ph) * 0.004), wl);
                 wordPt = wl > 0.5;
               }
             }
@@ -847,7 +847,7 @@
     var g = c.getContext("2d");
     var font = function (sz) { return "800 " + sz + "px -apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"; };
     var fit = function (lines) {
-      for (var sz = 170; sz >= 56; sz -= 6) {
+      for (var sz = 170; sz >= 14; sz -= 6) {
         g.font = font(sz);
         var ok = sz * 1.1 * lines.length <= c.height * 0.92;
         for (var k = 0; ok && k < lines.length; k++) ok = g.measureText(lines[k]).width <= c.width * 0.94;
@@ -855,15 +855,25 @@
       }
       return 0;
     };
-    var words = String(text).trim().split(/\s+/).slice(0, 4);
+    var words = String(text).trim().split(/\s+/);
     var lines = [words.join(" ")];
     var size = fit(lines);
-    if (!size && words.length > 1) {
-      var mid = Math.ceil(words.length / 2);
-      lines = [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
-      size = fit(lines);
+    if (words.length > 1) {
+      var best = lines, bestSize = size;
+      for (var mid = 1; mid < words.length; mid++) {
+        var candidate = [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
+        var candidateSize = fit(candidate);
+        if (candidateSize > bestSize) { best = candidate; bestSize = candidateSize; }
+      }
+      lines = best; size = bestSize;
     }
-    if (!size) { lines = [words[0].slice(0, 12)]; size = fit(lines) || 56; }
+    if (!size || (words.length === 1 && size < 56)) {
+      // Wrap a long name/word by Unicode code points, never cut off its ending.
+      var letters = Array.from(words.join(" "));
+      lines = [];
+      for (var at = 0; at < letters.length; at += 24) lines.push(letters.slice(at, at + 24).join(""));
+      size = fit(lines) || 14;
+    }
     g.font = font(size);
     g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = "#fff";
     for (var li = 0; li < lines.length; li++) g.fillText(lines[li], c.width / 2, c.height / 2 + (li - (lines.length - 1) / 2) * size * 1.08);
@@ -889,13 +899,23 @@
     /* Play the assembly again: the particles gather into the figure. */
     replay: function () { if (!reduceMotion) shared.assembleAt = performance.now(); front(); stage.resize(); if (reduceMotion) { updateLevel(performance.now(), 16); stage.draw(performance.now()); } },
     /* Burst apart while Echo speaks on the phone; false gathers it back. */
-    burst: function (on) { shared.exTarget = on ? 1 : 0; if (!on) shared.wsTarget = 0; },
-    /* Spell a few words with the burst's particles; null lets them go. */
+    burst: function (on) {
+      shared.exTarget = on ? 1 : 0;
+      if (!on) shared.wsTarget = 0;
+      if (reduceMotion && !on) { shared.words = null; shared.wordsN = 0; stage.draw(performance.now()); }
+    },
+    /* Spell the current spoken phrase; null releases its particles. */
     spell: function (text) {
-      if (!text) { shared.wsTarget = 0; return; }
+      canvas.setAttribute("aria-label", text ? "Echo says: " + text : "Echo, live");
+      if (!text) {
+        shared.wsTarget = 0;
+        if (reduceMotion) { shared.words = null; shared.wordsN = 0; stage.draw(performance.now()); }
+        return;
+      }
       var pts = wordPoints(text);
       if (!pts.length) return;
       shared.words = pts; shared.wordsN = pts.length / 2; shared.ws = 0; shared.wsTarget = 1;
+      if (reduceMotion) { stage.draw(performance.now()); }
     }
   };
   updateLevel(bootAt, 16);

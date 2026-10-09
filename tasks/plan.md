@@ -1,5 +1,8 @@
 # Echo Phone: a connected daily assistant
 
+## Full particle speech
+Display the entire spoken reply as short, readable particle phrases. Split without dropping words; queue each phrase in the same selected voice and use native utterance start/end events to select its particle text. Keep the burst active until the complete reply ends, so no timer switches to ordinary captions. Retain the full written reply in Chat and an accessible transcript. Cancellation, errors, hidden-app cleanup and replacement replies invalidate all queued utterance callbacks. The final phrase briefly remains before the humanoid reforms; Stop reforms it immediately. Reduced motion uses static particle words. Test all phrases, long words, speech queue completion, errors and cancellation, then verify mobile canvas rendering and deploy.
+
 ## Continuous voice follow-up
 
 Tapping either humanoid shares the Listen action, including a keyboard-accessible button and active state. Preserve the newly rendered launcher icons and icon cache versions. Restore the pre-logo idle Home layout by keeping the unfinished voice status markup hidden until a voice session starts; no visual redesign or humanoid animation replacement.

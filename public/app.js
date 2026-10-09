@@ -826,11 +826,18 @@
   /** When this phone last sent its voice from the Echo page: only the answer to that is read aloud. */
   let voiceAskedAt = 0;
   const VOICE_REPLY_MS = 120_000;
-  let speechDone = null;
+  const speechPlayer = new window.EchoSpeech.Player({
+    synthesis: window.speechSynthesis,
+    utterance: (text) => new SpeechSynthesisUtterance(text),
+    onStart: speechStart,
+    onPhrase: (text) => window.echoCore?.spell(text),
+    onEnd: speechEnd,
+    timeout: VOICE_REPLY_MS,
+  });
   function stopSpeaking() {
-    speechDone?.();
-    if (window.speechSynthesis) speechSynthesis.cancel();
-    if (talking) { talking = 1; speechEnd(); }
+    speechPlayer.cancel();
+    clearTimeout(settleTimer); settleTimer = 0;
+    window.echoCore?.spell(null); window.echoCore?.burst(false);
   }
   // Leaving or coming back to the app: whatever was queued is old by then, so it never plays later.
   document.addEventListener("visibilitychange", () => {
@@ -861,85 +868,32 @@
     if (!window.speechSynthesis || document.hidden) return Promise.resolve(false);
     // One reply at a time: a new one replaces anything queued, so nothing old can play later.
     stopSpeaking();
-    const ut = new SpeechSynthesisUtterance(text);
     const voices = speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang));
-    ut.voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices[0] || null;
-    return new Promise((resolve) => {
-      let ended = false, timer;
-      const done = (spoken = false) => {
-        if (ended) return;
-        ended = true; clearTimeout(timer);
-        if (speechDone === done) { speechDone = null; speechEnd(); }
-        resolve(spoken);
-      };
-      speechDone = done;
-      ut.onboundary = (e) => { if (!ended && Number.isFinite(e.charIndex)) speechWord(e.charIndex); };
-      ut.onend = () => done(true);
-      ut.onerror = () => done(false);
-      // A lost platform callback must not leave an active conversation stuck.
-      timer = setTimeout(() => { done(false); speechSynthesis.cancel(); }, VOICE_REPLY_MS);
-      speechStart(text);
-      try { speechSynthesis.speak(ut); } catch { done(false); }
-    });
+    const voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices[0] || null;
+    return speechPlayer.play(text, voice);
   }
 
   // ---------- Echo speaking on the phone: the figure bursts, the words show ----------
-  // While a reply is read aloud here, the humanoid bursts apart. Its particles
-  // spell the first few words, then the words follow the voice as captions;
-  // 4.5 s after it stops, the figure gathers back together.
+  // Every queued spoken phrase forms particle words. Chat keeps the complete
+  // written reply; this accessible transcript never becomes ordinary captions.
   const caption = $("speech-caption");
-  let talking = 0, settleTimer = 0, capTimer = 0, capText = "", capAt = 0, capHeard = false;
-  function firstWords(text) {
-    const words = String(text).replace(/\s+/g, " ").trim().split(" ");
-    const out = [];
-    for (const w of words) {
-      if (out.length >= 3 || (out.join(" ") + " " + w).trim().length > 18) break;
-      out.push(w.replace(/[.,!?;:"“”]+$/g, ""));
-      if (/[.!?]$/.test(w)) break;
-    }
-    return out.join(" ") || words[0].slice(0, 12);
-  }
-  function renderCaption(upTo) {
-    const text = capText;
-    const at = Math.min(text.length, Math.max(0, upTo));
-    const sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
-    let start = 0, cur = sentences[sentences.length - 1];
-    for (const sn of sentences) { if (start + sn.length > at) { cur = sn; break; } start += sn.length; }
-    const rel = Math.min(cur.length, Math.max(0, at - start));
-    const cut = rel + ((/^\S*/.exec(cur.slice(rel)) || [""])[0].length);
-    clear(caption);
-    const line = el("p", "cap-line");
-    line.append(el("span", "said", cur.slice(0, cut)), document.createTextNode(cur.slice(cut)));
-    caption.appendChild(line);
-  }
+  let settleTimer = 0;
   function speechStart(text) {
-    talking++;
-    clearTimeout(settleTimer);
-    const core = window.echoCore;
-    if (core) {
-      core.burst(true);
-      setTimeout(() => core.spell(firstWords(text)), 350);
-      setTimeout(() => core.spell(null), 2600);
-    }
-    capText = String(text); capAt = Date.now(); capHeard = false;
-    renderCaption(0);
-    clearInterval(capTimer);
-    // Without word timing from the voice, follow it at a speaking pace.
-    capTimer = setInterval(() => { if (!capHeard) renderCaption(Math.floor(((Date.now() - capAt) / 1000) * 15)); }, 250);
-    setTimeout(() => { if (talking || settleTimer) caption.classList.add("on"); }, 1400);
+    clearTimeout(settleTimer); settleTimer = 0;
+    caption.textContent = String(text);
+    window.echoCore?.burst(true);
   }
-  function speechWord(i) { capHeard = true; renderCaption(i); }
-  function speechEnd() {
-    talking = Math.max(0, talking - 1);
-    if (talking) return;
-    clearInterval(capTimer);
-    renderCaption(capText.length);
+  function speechEnd(completed) {
     clearTimeout(settleTimer);
+    if (!completed) {
+      settleTimer = 0; caption.textContent = "";
+      window.echoCore?.spell(null); window.echoCore?.burst(false);
+      return;
+    }
     settleTimer = setTimeout(() => {
       settleTimer = 0;
-      caption.classList.remove("on");
-      if (window.echoCore) window.echoCore.burst(false);
-    }, 4500);
+      window.echoCore?.spell(null); window.echoCore?.burst(false);
+    }, 1200);
   }
 
   // ---------- chat ----------

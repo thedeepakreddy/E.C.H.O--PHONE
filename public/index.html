@@ -112,7 +112,7 @@
   <!-- The live humanoid from Echo's control panel, drawn by humanoid-core.js. -->
   <button class="hero-stage" id="humanoid-talk" type="button" aria-label="Talk to Echo" aria-pressed="false"><canvas id="core-canvas" role="img" aria-label="Echo, live"></canvas></button>
   <div class="home-stack">
-    <div class="speech-caption" id="speech-caption" aria-live="polite"></div>
+    <div class="sr" id="speech-caption" aria-live="off"></div>
     <div class="glass banner" id="home-banner" role="status" hidden>
       <p><b class="bn-title"></b><span class="sub small bn-text"></span></p>
       <div class="btns2"><button class="glass big-btn bn-no">Not now</button><button class="cta big-btn bn-yes"></button></div>
@@ -531,6 +531,7 @@
 <script src="/humanoid-core.js" defer></script>
 <script src="/experience.js" defer></script>
 <script src="/voice-session.js" defer></script>
+<script src="/speech-particles.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>
