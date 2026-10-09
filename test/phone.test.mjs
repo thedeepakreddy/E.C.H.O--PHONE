@@ -276,8 +276,8 @@ test("standalone phones cannot access Mac data or revoke paired phones; pairing 
     phones.devices[device].sub = { endpoint: "https://web.push.apple.com/test", keys: { p256dh: "bad", auth: "bad" } };
     await store.set("phones", phones);
     await r.relay.tick();
-    assert.equal((await store.get(`brief:${device}`)).email, undefined);
-    assert.equal((await store.get(`brief:${device}`)).macOnline, false);
+    assert.equal((await store.get(`brief:${device}:phone`)).email, undefined);
+    assert.equal((await store.get(`brief:${device}:phone`)).macOnline, false);
     assert.equal((await fetch(`${r.base}/cloud/status`, { headers })).status, 200, "Mac-wide revocation leaves standalone sessions alone");
     assert.equal((await fetch(`${r.base}/cloud/signout-all`, { method: "POST", headers })).status, 403);
     assert.equal(r.relay.state().passGen, 2);
@@ -340,7 +340,7 @@ test("relay: without a Gemini key Phone mode says how to set it up", async () =>
 
 test("relay: calendar links are sealed, long-lived and come with the answer", async () => {
   let t = NOW;
-  const r = await startRelay({ now: () => t, gemini: scripted([call("remind_me", { text: "Plan dinner", when: "2026-10-08T18:00" }), text("Tap the button to set it.")]) });
+  const r = await startRelay({ now: () => t, gemini: scripted([call("add_to_calendar", { title: "Plan dinner", start: "2026-10-08T18:00" }), text("Tap the button to add it.")]) });
   try {
     const pass = signPass(r.relay.keys.pass, { device: DEVICE, gen: 0, now: NOW });
     const made = await fetch(`${r.base}/cloud/ics`, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify({ event: { title: "Dentist", start: "2026-10-09T13:30" } }) });
@@ -354,9 +354,9 @@ test("relay: calendar links are sealed, long-lived and come with the answer", as
     assert.equal((await fetch(r.base + tampered)).status, 404, "an edited link opens nothing");
     const bad = await fetch(`${r.base}/cloud/ics`, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify({ event: { title: "x", start: "soon" } }) });
     assert.equal(bad.status, 400);
-    // A reminder button arrives with its link, so a tap can open Safari at once.
+    // Calendar remains an external action: its button arrives with a sealed link.
     const chat = await (await fetch(`${r.base}/cloud/chat`, { method: "POST", headers: { "x-echo-pass": pass }, body: JSON.stringify({ text: "remind me", history: [] }) })).json();
-    assert.equal(chat.actions[0].type, "reminder");
+    assert.equal(chat.actions[0].type, "calendar");
     assert.match(chat.actions[0].url, /^\/ics\/v1\./);
     t += 31 * 86400_000;
     assert.equal((await fetch(r.base + url)).status, 404, "links expire after 30 days");

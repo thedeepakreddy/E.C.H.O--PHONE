@@ -56,11 +56,11 @@ The link carries a private token. Treat it like a key, and don't post it anywher
 
 | Tab | What it does |
 | --- | --- |
-| **Echo** | Live state, brain, Listen (talk to Echo; the answer is read out on the phone), Stop, Screen, Brain, Neural map, weather, today's numbers, and approvals when Echo needs your OK. |
-| **Chat** | A personal conversation with Echo, like Telegram. Text or hold-to-record voice notes; Whisper transcribes them on the Mac. |
-| **Missions** | Running missions with live steps, plus agents and coding projects. A mission's Stop button needs a second tap to confirm. |
-| **World** | Live conflict zones, earthquakes, wildfires, tsunami flags and storms from Osiris. |
-| **Settings** | Brain switch, Echo's voice switches, Face ID, reading replies aloud on the phone, sign out, and **Power off**, which always asks for Face ID. |
+| **Echo** | Voice, a humanoid that reacts to conversation, weather, live state and one dismissible question based on a saved note. Reduced motion keeps the figure visible without extra animation. |
+| **Today** | Tasks, reminders, upcoming bills and the latest calendar snapshot. Capture naturally, add an exact time, mark an occurrence Done, or Snooze it. Daily, weekdays, selected weekly days and monthly recurrence preserve local wall time. |
+| **Chat** | Synced Phone conversations, text and voice. Tap the title for folders or + for a new conversation. Echo organizes a clear topic automatically; users can move or rename it. |
+| **Saved** | Searchable notes, documents, receipts and dates. Echo retrieves saved facts, earlier Phone conversations and commitments with links back to their sources. |
+| **More** | Echo's Browser, optional Mac missions, World, photo/document help, account recovery and Settings. |
 
 Replies to anything sent from the phone come back to the phone only. Echo doesn't say them out loud on the Mac.
 
@@ -68,11 +68,13 @@ Replies to anything sent from the phone come back to the phone only. Echo doesn'
 
 Tap the pill at the top right of the Echo page to choose where Echo runs:
 - **Mac:** Echo on your Mac, as above.
-- **Phone:** Echo in the cloud, on this relay with Gemini. It answers, searches the web, checks weather and world events, and offers buttons you tap: add to calendar, remind me, run a Shortcut, open a link, or send a job to the Mac. It keeps working while the Mac is off. It can't reach the Mac itself.
+- **Phone:** Echo in the cloud, on this relay with Gemini. It answers, searches, recalls saved context and captures authorized tasks and reminders directly in Today. Calendar, Shortcuts and Mac jobs still have explicit action buttons. A delegated web task starts Echo's Browser automatically, which retains its approval checks before consequential actions. It keeps working while the Mac is off.
 
-**How it's protected.** Get started creates a random phone identity and a signed session, valid for 30 days and renewed by this server. The signed session is needed to restore that identity; supplying a device id cannot access another phone's saved data. Standalone sessions cannot read the Mac's digest, submit Mac jobs, or sign out its paired phones. Optional Mac sign-in adds a paired pass for the same identity, keeping saved data intact. *Sign out every phone* cancels the Mac's paired passes; unrelated standalone users stay signed in. Everything the server stores is encrypted with a key derived from `RELAY_SECRET`. Phone sessions are stored on this browser; clearing browser storage loses access to that identity.
+**How it's protected.** Get started creates a random account identity and a signed 30-day session, renewed by this server. Supplying a device id cannot restore it. More → Your Echo account creates a random 256-bit recovery key; only its hash mapping is stored. Save the key privately before clearing browser storage or changing phones. Restoring on another installation syncs Phone conversations, folders, tasks, memory and scans through encrypted Upstash storage, and always issues Phone-only privileges. Key rotation invalidates the old key; already signed-in installations stay connected. Mac authentication, browser cookies and Mac chat history are not restored. Standalone sessions cannot read the Mac's digest, submit Mac jobs or revoke its paired phones. Optional Mac sign-in adds a paired pass for the same identity. Each installation has its own notification subscription; paired and Phone-only briefings are stored and delivered separately. Recovery is unavailable on an ephemeral memory store.
 
-**Messages sync.** Phone mode's messages are copied into the Mac's chat when it's back, never twice.
+**Messages sync.** Phone conversations use server history and bounded encrypted threads, with idempotent turn IDs. Older local Phone messages migrate once per installation; Mac messages stay outside that migration. Phone messages also copy into a signed-in Mac's chat when it returns, using stable IDs to avoid duplicates.
+
+**Natural capture and help.** “Don't let me forget to call Mum every weekday at 9” creates a recurring reminder immediately. “Remember my passport renewal idea” saves a note. “What did we decide?” searches the second brain. “Help me handle this” on a scan prepares a practical next step or draft. “Do this for me” delegates supported web work. Echo cannot pay a bill or send a message merely by marking a task Done, and it says when a requested integration is unavailable.
 
 To set it up, add these to the service's **Environment** on Render:
 
@@ -96,7 +98,7 @@ Turn on **Settings → Morning briefing → Briefing and reminders** in the Home
   - today's reminders
 
   **Brief me** builds it on demand.
-- **Reminders** from Phone mode arrive as Echo notifications at their time. With notifications off, they go to Calendar through Safari instead.
+- **Reminders** are captured directly in Today, including recurrence. Allow notifications in Today for background alerts; this does not require turning on a daily briefing. Without OS permission the items remain in Today, and Echo never guarantees push delivery. Done completes one occurrence; Snooze changes only that occurrence, even when the user changes time zones. Notification delivery does not complete a task. The scheduler catches up once per recurring series and retries failed deliveries.
 - **Calendar from this iPhone:** a web app can't read the iPhone's calendar, so a one-time Shortcut automation posts today's events to a private link each morning. Find it in Settings → Morning briefing → Calendar from this iPhone, which has step-by-step instructions.
   - The link can only add today's events for this phone's briefing, and **Make a new link** retires the old one.
   - The briefing prefers that morning's events from the iPhone, and uses the Mac's summary otherwise.

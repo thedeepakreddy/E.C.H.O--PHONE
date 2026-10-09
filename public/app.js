@@ -122,7 +122,10 @@
   const pub = (p) => fetch(p).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))));
 
   // ---------- views ----------
-  const TABS = ["home", "chat", "missions", "browser", "world"];
+  const TABS = ["home", "today", "chat", "memory", "more"];
+  let experience = null, currentThread = store.get(`echo_thread_${DEV}`) || null;
+  const INSTALLATION = store.get("echo_installation") || crypto.randomUUID();
+  store.set("echo_installation", INSTALLATION);
   let currentView = "signin", lastTab = store.get("echo_tab") || "home";
   /** Where each pushed page's Back goes: the page it was opened from. */
   const backTo = {};
@@ -138,7 +141,7 @@
     }
     if (TABS.includes(view)) { lastTab = view; store.set("echo_tab", view); }
     if (view === "home" && window.echoCore) window.echoCore.replay(); // the figure assembles every time
-    if (view === "chat") { unread = 0; renderBadge(); setTimeout(scrollMessages, 30); pollChat(); }
+    if (view === "chat") { unread = 0; renderBadge(); setTimeout(scrollMessages, 30); pollChat(); window.echoCore?.avatar(); }
     if (view === "world") loadWorld();
     if (view === "settings") { loadPhoneCal(); renderMacPage(); }
     if (view === "mac") renderMacPage();
@@ -146,8 +149,10 @@
     if (view === "screen") openScreen(); else closeScreen();
     if (view === "missions") { setSeg(seg); renderMissions(); renderHandoffs(); loadHandoffs(); }
     if (view === "brain" && last) renderBrain(last);
+    if (view === "memory") { renderMemory(); loadMemory(); }
+    experience?.onView(view);
   }
-  document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
+  document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => b.dataset.tab === "memory" ? openMemory() : show(b.dataset.tab)));
   document.addEventListener("click", (e) => {
     const open = e.target.closest("[data-open]");
     if (open) show(open.dataset.open);
@@ -156,16 +161,31 @@
   });
 
   // ---------- sheets ----------
+  let sheetFocus = null;
   function openSheet(id) {
     closeSheets();
+    sheetFocus = document.activeElement;
     $("scrim").hidden = false;
     $(id).hidden = false;
+    setTimeout(() => $(id).querySelector("input,textarea,button,select")?.focus(), 0);
   }
   function closeSheets() {
     $("scrim").hidden = true;
     document.querySelectorAll(".sheet").forEach((s) => (s.hidden = true));
+    if (sheetFocus?.isConnected) sheetFocus.focus();
+    sheetFocus = null;
   }
   $("scrim").addEventListener("click", closeSheets);
+  document.addEventListener("keydown", (e) => {
+    const s = document.querySelector(".sheet:not([hidden])"); if (!s) return;
+    if (e.key === "Escape") { e.preventDefault(); closeSheets(); }
+    if (e.key === "Tab") {
+      const focus = [...s.querySelectorAll("button,input,textarea,select,a[href]")].filter((n) => !n.disabled && n.getClientRects().length);
+      if (!focus.length) return;
+      if (e.shiftKey && document.activeElement === focus[0]) { e.preventDefault(); focus.at(-1).focus(); }
+      else if (!e.shiftKey && document.activeElement === focus.at(-1)) { e.preventDefault(); focus[0].focus(); }
+    }
+  });
 
   // ---------- sign in ----------
   const b64 = {
@@ -249,7 +269,12 @@
   function signedOut(message, { full = false } = {}) {
     S = ""; store.set("echo_s", null);
     stopPolling();
-    if (full) { PASS = ""; store.set("echo_pass", null); cloudInfo = null; briefInfo = null; macOnline = false; mode = "phone"; store.set("echo_mode", "phone"); showWelcome(); if (message) toast(message); return; }
+    if (full) {
+      cloudAbort?.abort(); PASS = ""; store.set("echo_pass", null); cloudInfo = null; briefInfo = null; macOnline = false;
+      mode = "phone"; store.set("echo_mode", "phone"); currentThread = null; chatCache = []; store.set(CACHE_KEY, "[]");
+      mem.items = []; mem.upcoming = []; mem.open = null; memLoaded = false; snapState = null; snapCtx = null;
+      experience?.reset(); renderChat(); showWelcome(); if (message) toast(message); return;
+    }
     macOnline = false;
     mode = "phone"; store.set("echo_mode", "phone");
     renderMode(); renderMacPage();
@@ -495,7 +520,7 @@
     $("mode-phone-status").textContent = passValid() ? cloudLine() : "Available without a Mac";
     $("set-cloud").textContent = passValid() ? cloudLine() : "Start Echo on this phone";
     $("signout-all").hidden = !PASS || passClaims()?.p === true;
-    const prompts = phone ? ["What can you help me with?", "Help me plan my day", "What's happening in the world?", "Good night"] : ["Status of my tasks", "What's on my screen?", "Read my latest email", "Good night"];
+    const prompts = phone ? ["Help me handle this", "Do this for me", "Don’t let me forget this", "What did we decide?"] : ["Status of my tasks", "What's on my screen?", "Read my latest email", "Good night"];
     document.querySelectorAll(".chips .chip").forEach((chip, i) => { chip.textContent = prompts[i] || chip.textContent; });
     if (phone) paintPhoneHome(); else if (macOnline && last) paintMacHome(last); else paintOffline();
     renderTyping(chatTyping || cloudBusy);
@@ -588,7 +613,7 @@
     return d;
   }
   async function refreshCloud() {
-    if (currentView === "signin") return;
+    if (currentView === "signin" || (!PASS && !(T && S))) return;
     try {
       await ensurePhoneSession();
       cloudInfo = await cloudApi("/cloud/status");
@@ -825,7 +850,7 @@
   // even with the Mac off, and Phone mode's messages are copied to the Mac's
   // chat once it's back (each with this phone's own id, so never twice).
   let chatAfter = 0, unread = 0, chatTyping = false, lastDay = "", chatLoaded = false, lastAt = 0;
-  let cloudAbort = null, lastCloudLine = "";
+  let cloudAbort = null, lastCloudLine = "", preparingCloud = false;
   const messagesEl = $("messages");
   const CACHE_KEY = "echo_chat_cache", CACHE_MAX = 400;
   let chatCache = [];
@@ -835,7 +860,7 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => { chatCache = chatCache.slice(-CACHE_MAX); store.set(CACHE_KEY, JSON.stringify(chatCache)); }, 300);
   }
-  const byTime = () => [...chatCache].sort((x, y) => x.at - y.at);
+  const byTime = () => chatCache.filter((m) => mode !== "phone" || (m.src === "phone" && (!currentThread || !m.threadId || m.threadId === currentThread))).sort((x, y) => x.at - y.at);
   const newKey = () => `c-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   function scrollMessages() { messagesEl.scrollTop = messagesEl.scrollHeight; }
   messagesEl.addEventListener("scroll", () => {
@@ -872,6 +897,16 @@
       }
       n.appendChild(acts);
     }
+    if (!mine && (m.captures?.length || m.references?.length)) {
+      const receipts = el("div", "acts");
+      for (const c of m.captures || []) {
+        const b = el("button", "glass act-btn saved-chip", `✓ Today: ${c.text}`); b.addEventListener("click", (e) => { e.stopPropagation(); show("today"); }); receipts.append(b);
+      }
+      for (const r of m.references || []) {
+        const b = el("button", "glass act-btn", `↗ ${r.title}`); b.addEventListener("click", (e) => { e.stopPropagation(); experience?.openReference(r); }); receipts.append(b);
+      }
+      n.append(receipts);
+    }
     if (!mine && m.sources && m.sources.length) {
       const srcs = el("div", "srcs");
       for (const src of m.sources) {
@@ -899,6 +934,7 @@
   function putMessage(m) {
     chatCache.push(m);
     saveCache();
+    if (mode === "phone" && (m.src !== "phone" || (m.threadId && currentThread && m.threadId !== currentThread))) return;
     if (m.at >= lastAt) { addMessage(m); if (stickToBottom || m.from === "you") scrollMessages(); } else renderChat();
   }
   function dropMessage(m) {
@@ -967,7 +1003,10 @@
     }
   }
   $("composer").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim()) sendChat(); });
-  document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => sendChat(c.textContent)));
+    document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
+      if (mode === "phone" && /handle this|do this for me|forget this/i.test(c.textContent)) { restoreInput(`${c.textContent}: `); input.focus(); }
+      else sendChat(c.textContent);
+    }));
   // Tapping the conversation puts the keyboard away. Tapping a message offers
   // to remember it (Saved) or copy it.
   messagesEl.addEventListener("click", (e) => {
@@ -1005,6 +1044,7 @@
     cloudBusy = on;
     renderTyping(chatTyping || on);
     if (mode === "phone") paintPhoneHome();
+    window.echoCore?.avatar();
   }
   async function askCloud(path, payload, { speak = false } = {}) {
     if (!passValid()) { toast("Tap Get started to use Echo on this phone.", true); return null; }
@@ -1012,8 +1052,9 @@
     const abort = (cloudAbort = new AbortController());
     setCloudBusy(true);
     try {
-      const d = await cloudApi(path, { ...payload, context: cloudContext() }, { signal: abort.signal });
-      const reply = { k: newKey(), at: Date.now(), from: "echo", text: d.reply, kind: "text", src: "phone", actions: d.actions || [], sources: d.sources || [], saved: d.saved || [] };
+      const d = await cloudApi(path, { ...payload, threadId: currentThread, context: cloudContext() }, { signal: abort.signal });
+      const reply = { k: payload.requestId ? `${payload.requestId}-echo` : newKey(), at: Date.now(), from: "echo", text: d.reply, kind: "text", src: "phone", threadId: currentThread,
+        actions: d.actions || [], sources: d.sources || [], saved: d.saved || [], captures: d.captures || [], references: d.references || [] };
       putMessage(reply);
       prepareActions(reply);
       lastCloudLine = d.reply;
@@ -1021,6 +1062,10 @@
       if (speak) say(d.reply);
       if (currentView !== "chat") { unread++; renderBadge(); }
       renderMode();
+      window.echoCore?.react(d.expression || "attentive");
+      experience?.afterReply();
+      const delegation = reply.actions.find((a) => a.type === "browse" && a.autoStart);
+      if (delegation) setTimeout(() => runEcho(delegation.data.task), 0);
       syncToMac();
       return d;
     } catch (e) {
@@ -1031,10 +1076,13 @@
     }
   }
   async function sendCloud(text) {
+    if (cloudBusy || preparingCloud) { restoreInput(text); return toast("Let Echo finish this reply first."); }
+    preparingCloud = true;
+    try { await experience?.ensureThread(); } catch (e) { toast(e.message, true); restoreInput(text); return; } finally { preparingCloud = false; }
     const history = historyNow();
-    const mine = { k: newKey(), at: Date.now(), from: "you", text, kind: "text", src: "phone" };
+    const mine = { k: newKey(), at: Date.now(), from: "you", text, kind: "text", src: "phone", threadId: currentThread };
     putMessage(mine);
-    const d = await askCloud("/cloud/chat", { text, history });
+    const d = await askCloud("/cloud/chat", { text, history, requestId: mine.k });
     if (!d) { dropMessage(mine); restoreInput(text); }
   }
   function toBase64(buf) {
@@ -1045,10 +1093,13 @@
   }
   async function sendCloudVoice(wav, opts = {}) {
     if (wav.byteLength > 2_200_000) return toast("That's too long. Keep voice messages under a minute.", true);
+    if (cloudBusy || preparingCloud) return toast("Let Echo finish this reply first.");
+    preparingCloud = true;
+    try { await experience?.ensureThread(); } catch (e) { return toast(e.message, true); } finally { preparingCloud = false; }
     const history = historyNow();
-    const mine = { k: newKey(), at: Date.now(), from: "you", text: "Voice message", kind: "voice", src: "phone" };
+    const mine = { k: newKey(), at: Date.now(), from: "you", text: "Voice message", kind: "voice", src: "phone", threadId: currentThread };
     putMessage(mine);
-    const d = await askCloud("/cloud/voice", { audio: toBase64(wav), history }, opts);
+    const d = await askCloud("/cloud/voice", { audio: toBase64(wav), history, requestId: mine.k }, opts);
     if (!d) return dropMessage(mine);
     if (d.transcript) { mine.text = d.transcript; saveCache(); renderChat(); }
   }
@@ -1457,7 +1508,10 @@
     try { const r = await api("/action", { json: { type: "set-voice", key: s.dataset.voice, value } }); if (!r.ok) throw new Error(r.message); }
     catch (e) { s.setAttribute("aria-checked", String(!value)); toast(e.message || "Couldn't change that.", true); }
   }));
-  $("sign-out").addEventListener("click", () => signedOut("", { full: true }));
+  $("sign-out").addEventListener("click", async () => {
+    if (PASS) await cloudApi("/cloud/push/unsubscribe", { installation: INSTALLATION }).catch(() => {});
+    signedOut("", { full: true });
+  });
   // Every phone, including this one: the Mac cancels its sessions and every cloud
   // pass; with the Mac off, the relay cancels the passes and tells the Mac later.
   let signoutArmed = 0;
@@ -1625,6 +1679,9 @@
       box.appendChild(c);
       if (r.translation) box.appendChild(bcard(`In English${r.language ? `, from ${r.language}` : ""}`, el("p", "small", r.translation)));
       box.appendChild(saveToMemoryButton());
+      const handle = el("button", "cta big-btn", "Help me handle this");
+      handle.addEventListener("click", () => { snapCtx = { snap: r, until: Date.now() + 20 * 60_000 }; mode = "phone"; store.set("echo_mode", "phone"); renderMode(); show("chat"); sendCloud("Help me handle this document. Explain what it means and the next practical step. Check any relevant saved context. Don't take external actions or create reminders until I've asked you to."); });
+      box.appendChild(handle);
       const acts = el("div", "snap-acts"); acts.id = "snap-acts";
       box.appendChild(acts);
       renderSnapActions();
@@ -2634,11 +2691,12 @@
   async function runEcho(task, resume = null) {
     if (!passValid()) return toast("Tap Get started to use the Browser.", true);
     if (br.run) return toast("Echo is already on it. Tap Take over to stop.");
+    try { await experience?.ensureThread(); } catch (e) { return toast(e.message, true); }
     if (currentView !== "browser") show("browser");
     try { await browserSession(); } catch (e) { return toast(cloudProblem(e), true); }
     const run = br.run = resume
-      ? { ...resume, stopped: false, abort: new AbortController() }
-      : { task, plan: null, cur: 0, memory: "", notes: [], sources: [], part: 1, actions: 0, userSaid: "", stopped: false, abort: new AbortController() };
+      ? { ...resume, requestId: newKey(), stopped: false, abort: new AbortController() }
+      : { task, threadId: currentThread, requestId: newKey(), plan: null, cur: 0, memory: "", notes: [], sources: [], part: 1, actions: 0, userSaid: "", stopped: false, abort: new AbortController() };
     if (resume && run.plan && run.plan.steps[run.cur]) { const st = run.plan.steps[run.cur]; st.attempts = 0; st.startUrl = null; }
     $("br-result").hidden = true;
     $("br-ask").hidden = true;
@@ -2682,7 +2740,7 @@
       if (!run.stopped) {
         renderPlan(run);
         renderRun("Echo is writing the report", "Putting every step's results together…");
-        const d = await callBrowse(run, "/cloud/browse/report", { task: run.task, plan: wirePlan(run), notes: run.notes, sources: run.sources, context: { tz: localTz() } });
+        const d = await callBrowse(run, "/cloud/browse/report", { task: run.task, threadId: run.threadId, requestId: run.requestId, plan: wirePlan(run), notes: run.notes, sources: run.sources, context: { tz: localTz() } });
         text = d.report;
       }
     } catch (e) {
@@ -2725,8 +2783,9 @@
     if (failed || tookOver) return; // only finished tasks go to the chat
     // The chat keeps the report too (and the Mac gets it with Phone mode's other messages).
     const at = Date.now();
-    putMessage({ k: newKey(), at, from: "you", text: `🌐 ${run.task}`, kind: "text", src: "phone" });
-    putMessage({ k: newKey(), at: at + 1, from: "echo", text: text || "Done.", kind: "text", src: "phone", sources: run.sources.slice(0, 4) });
+    putMessage({ k: run.requestId, at, from: "you", text: `🌐 ${run.task}`, kind: "text", src: "phone", threadId: run.threadId });
+    putMessage({ k: `${run.requestId}-echo`, at: at + 1, from: "echo", text: text || "Done.", kind: "text", src: "phone", threadId: run.threadId, sources: run.sources.slice(0, 4) });
+    window.echoCore?.react("celebrate");
     syncToMac();
   }
   function takeOver() {
@@ -2885,7 +2944,7 @@
     let sub = await reg.pushManager.getSubscription();
     if (sub && !sameKey(sub, key)) { await sub.unsubscribe(); sub = null; }
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64.toBuf(key) });
-    await cloudApi("/cloud/push/subscribe", { subscription: sub.toJSON() });
+    await cloudApi("/cloud/push/subscribe", { subscription: sub.toJSON(), installation: INSTALLATION });
     briefInfo = { ...(briefInfo || {}), subscribed: true };
   }
   $("sw-brief").addEventListener("click", async () => {
@@ -2894,7 +2953,7 @@
     try {
       if (on) {
         await saveBriefPrefs({ on: false });
-        await cloudApi("/cloud/push/unsubscribe", {});
+        await cloudApi("/cloud/push/unsubscribe", { installation: INSTALLATION });
         briefInfo.subscribed = false;
         renderBriefSettings();
         return toast("Briefing and reminders are off");
@@ -3009,7 +3068,7 @@
     try {
       const v = new URL(url, location.origin).searchParams.get("view");
       const q = new URL(url, location.origin).searchParams;
-      if (v === "briefing") openBriefing(); else if (v === "chat") show("chat"); else if (v === "missions") show("missions");
+      if (v === "briefing") openBriefing(); else if (v === "chat") show("chat"); else if (v === "missions") show("missions"); else if (v === "today") show("today");
       else if (v === "memory") openMemory({ id: q.get("id"), from: TABS.includes(currentView) ? currentView : lastTab });
     } catch { /* not ours */ }
   }
@@ -3156,6 +3215,30 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
   setInterval(() => { if (!document.hidden) checkVersion(); }, 5 * 60_000);
   setComposerMode();
+  experience = window.createEchoExperience({
+    cloud: cloudApi, show, view: () => currentView, tz: localTz, account: () => DEV, installation: INSTALLATION,
+    toast, openSheet, closeSheets, hasSession: () => !!PASS, busy: () => cloudBusy || preparingCloud, typing: () => !!input.value.trim(),
+    react: (expression) => window.echoCore?.react(expression), notifications: enableNotifications,
+    legacyMessages: () => chatCache.filter((m) => m.src === "phone" && !m.threadId),
+    setThread: (id, messages) => {
+      currentThread = id;
+      if (cloudBusy) return;
+      chatCache = [...chatCache.filter((m) => m.src !== "phone" || (m.threadId && m.threadId !== id)), ...messages]; saveCache(); renderChat();
+    },
+    focusChat: () => input.focus(), openMemory: (id) => openMemory({ id }),
+    ask: (text) => { mode = "phone"; store.set("echo_mode", "phone"); renderMode(); show("chat"); sendCloud(text); },
+    draft: (text) => { mode = "phone"; store.set("echo_mode", "phone"); renderMode(); show("chat"); restoreInput(text); input.focus(); },
+    snap: () => { mode = "phone"; store.set("echo_mode", "phone"); renderMode(); $("snap-file").click(); },
+    restore: async (d) => {
+      if (PASS) await cloudApi("/cloud/push/unsubscribe", { installation: INSTALLATION }).catch(() => {});
+      cloudAbort?.abort(); stopPolling(); T = null; S = ""; store.set("echo_t", null); store.set("echo_s", null);
+      DEV = d.device; store.set("echo_dev", DEV); savePass(d.cloudPass); mode = "phone"; store.set("echo_mode", "phone");
+      currentThread = null; chatCache = []; store.set(CACHE_KEY, "[]"); cloudInfo = null; briefInfo = null; macOnline = false;
+      mem.items = []; mem.upcoming = []; mem.open = null; memLoaded = false; snapCtx = null;
+      renderChat(); renderMode(); refreshCloud();
+      if ("Notification" in window && Notification.permission === "granted") enableNotifications().catch(() => {});
+    },
+  });
   renderChat();
   if (T && S) { start(); enter(); }
   else if (PASS) { mode = "phone"; store.set("echo_mode", "phone"); enter(); loadWeather(); }

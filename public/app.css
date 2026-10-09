@@ -10,7 +10,7 @@
 :root {
   --bg: #02070a;
   --text: #f2fbff;
-  --sub: rgba(232, 244, 250, .62);
+  --sub: #c9d8e2;
   --cyan: #5ee7f5;
   --green: #3ee6b0;
   --amber: #ffb35c;
@@ -44,7 +44,7 @@ button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; border: 0; background: none; padding: 0; touch-action: manipulation; }
 /* 16px stops iOS zooming into a focused field. */
 input, textarea { font-size: 16px; background: none; border: 0; outline: none; color: var(--text); min-width: 0; }
-input::placeholder, textarea::placeholder { color: rgba(232, 244, 250, .45); }
+input::placeholder, textarea::placeholder { color: #b5c6d1; }
 a { color: #8ff3fc; text-decoration: none; }
 h1 { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
 h2 { margin: 0; font-size: 21px; font-weight: 700; letter-spacing: -.01em; }
@@ -93,7 +93,7 @@ svg.fill { fill: currentColor; stroke: none; }
 .glass > * { position: relative; z-index: 3; }
 .bubble {
   position: relative; isolation: isolate; border-radius: 50%; display: grid; place-items: center; flex: none;
-  background: radial-gradient(circle at 32% 24%, rgba(255, 255, 255, .62), rgba(255, 255, 255, .12) 34%, rgba(255, 255, 255, .04) 58%, rgba(130, 225, 255, .16) 100%);
+  background: radial-gradient(circle at 32% 24%, rgba(255, 255, 255, .32), rgba(255, 255, 255, .12) 34%, rgba(255, 255, 255, .04) 58%, rgba(130, 225, 255, .16) 100%);
   backdrop-filter: blur(22px) saturate(190%); -webkit-backdrop-filter: blur(22px) saturate(190%);
   box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, .7), inset 0 -8px 16px -6px rgba(130, 225, 255, .3), inset 0 0 0 1px rgba(255, 255, 255, .22), 0 10px 24px rgba(0, 0, 0, .4);
   transition: transform .12s ease, box-shadow .2s ease;
@@ -581,3 +581,52 @@ body.kb .br-panel { margin-bottom: 8px; }
 .ho-summary { color: var(--text); opacity: .85; margin-top: 2px; }
 #seg-missions, #seg-agents, #seg-projects, #handoff-box { display: flex; flex-direction: column; gap: 12px; }
 #seg-missions[hidden], #seg-agents[hidden], #seg-projects[hidden], #handoff-box[hidden] { display: none; }
+
+/* Daily work: quieter glass, generous touch targets, one clear action per row. */
+.tabbar button { color: #c9d8e2; }
+.cta.small-pill, .cta.act-btn, .cta.pill { color: #04252a; }
+.conversation-title { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; }
+.conversation-title b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.daily-hint { padding: 4px 8px 16px; }
+.daily-group { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 24px; }
+.daily-group-title { font-size: 17px; padding: 0 6px; margin-bottom: 2px; }
+.daily-item { border-radius: 24px; padding: 16px; display: flex; flex-direction: column; gap: 7px; }
+.daily-kind { color: #a5eaf3; font-size: 12px; }
+.daily-title { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.daily-item .daily-kind, .daily-item .daily-title { padding-right: 36px; }
+.daily-item > .daily-more { position: absolute; top: 10px; right: 10px; }
+.daily-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.daily-buttons button { min-height: 44px; padding: 10px 16px; }
+.daily-buttons button:last-child { margin-left: auto; }
+.daily-item .daily-buttons button:last-child { margin-left: 0; }
+.daily-permission { border-radius: 20px; display: flex; flex-direction: column; width: 100%; text-align: left; padding: 16px; margin-bottom: 16px; gap: 4px; }
+.daily-completed summary { cursor: pointer; padding: 16px 4px; min-height: 48px; }
+.daily-completed .daily-item { margin-bottom: 10px; }
+.is-complete .daily-title { text-decoration: line-through; color: #c9d8e2; }
+.daily-empty { text-align: center; padding: 28px 22px; align-items: center; }
+.daily-empty-mark { color: #3ee6b0; font-size: 32px; }
+.more-list b, .more-list .sub { display: block; }
+.more-list .row { min-height: 80px; }
+#v-account textarea { display: block; width: 100%; background: rgba(0, 10, 17, .55); border: 1px solid rgba(193, 230, 241, .22); border-radius: 16px; padding: 14px; margin: 10px 0; resize: vertical; }
+#recovery-key { font: 15px/1.6 ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+.experience-sheet { max-height: min(82%, 720px); display: flex; flex-direction: column; gap: 16px; }
+.experience-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.experience-head .pill { padding: 10px 16px; min-height: 44px; }
+.experience-content { overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 16px; padding: 2px; }
+.experience-form { display: flex; flex-direction: column; gap: 16px; }
+.experience-label { display: flex; flex-direction: column; gap: 8px; color: #c9d8e2; font-size: 13px; }
+.experience-input { border-radius: 16px; padding: 14px; width: 100%; min-height: 50px; color: #f2fbff; }
+select.experience-input { font: inherit; background: #152c38; border: 1px solid rgba(200, 235, 245, .3); }
+.folder-filters { display: flex; gap: 8px; overflow-x: auto; flex-shrink: 0; padding: 3px 0; }
+.folder-filters button { flex: none; min-height: 44px; padding: 10px 16px; }
+.folder-filters button[aria-pressed="true"] { border: 1px solid #5ee7f5; background: #153743; }
+.conversation-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(200, 235, 245, .15); }
+.conversation-entry { text-align: left; flex: 1; min-width: 0; padding: 8px 4px; display: flex; flex-direction: column; gap: 6px; }
+.conversation-entry[aria-current="true"] b { color: #8ff3fc; }
+.echo-curiosity { display: flex; gap: 4px; align-items: center; padding: 0 8px; }
+.curiosity-question { color: #c9d8e2; font-size: 12px; line-height: 1.4; text-align: left; flex: 1; }
+.curiosity-dismiss { color: #c9d8e2; min-width: 44px; min-height: 44px; font-size: 22px; }
+body[data-expression="curious"] #core-canvas { filter: drop-shadow(0 0 8px rgba(169, 139, 255, .3)); }
+body[data-expression="celebrate"] #core-canvas { filter: drop-shadow(0 0 12px rgba(62, 230, 176, .3)); }
+@media (max-height: 700px) { .echo-curiosity { position: absolute; top: calc(var(--safe-top) + 72px); left: 20px; right: 20px; } }
+@media (prefers-reduced-motion: reduce) { #core-canvas { transition: none; } }

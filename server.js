@@ -46,6 +46,8 @@ import { DEFAULT_PREFS, cleanPrefs, addReminder, buildBriefing, runTick, localPa
 import { MAX_IMAGE_B64, cleanExpense, monthTotals, recheckSnap, snapActions } from "./lib/snap.js";
 import { MAX_WAITING, FINAL, checkTask, checkAssertion, forPhone, tidy, notificationFor } from "./lib/handoff.js";
 import { createMemory, fromSnap, fromNote, forPhone as memoryForPhone, syncDates, contextText, comingUp } from "./lib/memory.js";
+import { dailyState, addDaily, dailyRows, actDaily, subscriptions } from "./lib/daily.js";
+import { conversationState, newThread, threadFor, changeConversation, migrateConversations, conversationIndex, recordTurn, searchConversations } from "./lib/conversations.js";
 import {
   UA, SEARCH_URL, MAX_PAGE, MAX_ASSET, PAGE_HEADERS, ASSET_TYPE, proxyPath, fromProxyPath, checkUrl, addressOrSearch, sensitiveHost,
   cookieHeader, storeCookies, fetchUpstream, decodeBody, rewriteHtml, rewriteCss, notePage,
@@ -64,7 +66,7 @@ const PUBLIC = join(fileURLToPath(new URL(".", import.meta.url)), "public");
 /** The app's version: a hash of its files, so an open app can tell it's out of date and reload. */
 export const APP_VERSION = (() => {
   const h = createHash("sha256");
-  for (const f of ["index.html", "app.js", "app.css", "humanoid-core.js", "sw.js"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
+  for (const f of ["index.html", "app.js", "experience.js", "app.css", "humanoid-core.js", "sw.js"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
   return h.digest("hex").slice(0, 12);
 })();
 const TYPES = {
@@ -188,7 +190,7 @@ export function createRelay({
     ticking ??= withPhones((phones) => runTick({
       phones, now: now(), tools: briefingTools, macOnline: online(), push,
       digest: (id, dev) => dev.phoneOnly ? null : store.get("digest").catch(() => null),
-      storeBriefing: (id, b) => store.set(`brief:${id}`, b, 3 * 86400),
+      storeBriefing: (id, b, phoneOnly) => store.set(`brief:${id}${phoneOnly ? ":phone" : ""}`, b, 3 * 86400),
       phoneCalendar: (id) => store.get(`cal:${id}`).catch(() => null),
     })).catch(() => false).finally(() => { ticking = null; });
     return ticking;
@@ -225,6 +227,7 @@ export function createRelay({
   }
   /** Scan history per phone: what each snap found (never the photo), kept apart from the tick's data. */
   const withSnaps = (device, fn, opts) => withKey(`snaps:${device}`, () => ({ items: [] }), fn, opts);
+  const withConversations = (device, fn, opts) => withKey(`conversations:${device}`, conversationState, fn, opts);
   const snapSummary = (e) => ({ id: e.id, at: e.at, kind: e.snap.kind, title: e.snap.title, summary: e.snap.summary,
     amount: e.snap.amount, currency: e.snap.currency, date: e.snap.dueDate ?? e.snap.purchaseDate ?? e.snap.eventStart ?? null, done: e.done ?? {}, saved: e.done?.memory ?? null });
   /** Memory (lib/memory.js): saved items per phone; their dates go into the tick's data. */
@@ -239,8 +242,31 @@ export function createRelay({
     const zone = validTz(tz) ? tz : dev.prefs?.tz;
     return {
       upcoming: comingUp(dev, now(), zone, 30),
-      search: async (q) => (await memory.search(device, q, { k: 4 })).map((h) => ({ text: contextText(h.meta, h.body) })),
+      search: async (q) => {
+        const [saved, chats, tasks] = await Promise.all([
+          memory.search(device, q, { k: 4 }),
+          withConversations(device, (st) => searchConversations(st, q), { save: false }),
+          withPhones((phones) => dailyRows(deviceOf(phones, device), now()).filter((t) => String(q).toLowerCase().split(/\s+/).some((w) => w.length > 2 && t.text.toLowerCase().includes(w))).slice(0, 4), { save: false }),
+        ]);
+        return [...saved.map((h) => ({ id: h.meta.id, type: "memory", title: h.meta.title, text: contextText(h.meta, h.body) })),
+          ...chats, ...tasks.map((t) => ({ id: t.taskId, type: "task", title: t.text, text: `${t.text}; ${t.when || "no due date"}; ${t.status}` }))];
+      },
       save: async (note) => (await memory.add(device, fromNote(note), { tz: zone })).item,
+      capture: async (raw) => withPhones((phones) => addDaily(deviceOf(phones, device), { ...raw, tz: zone }, now(), randomUUID().slice(0, 12))),
+      today: async () => {
+        const [rows, calendar] = await Promise.all([
+          withPhones((phones) => dailyRows(deviceOf(phones, device), now()).slice(0, 35), { save: false }), store.get(`cal:${device}`),
+        ]);
+        return { items: rows.map((r) => ({ task_id: r.taskId, occurrence_id: r.id, text: r.text, when: r.when, due: r.due ? new Date(r.due).toISOString() : null, tz: r.tz, repeat: r.repeat, kind: r.kind })), events: calendar?.events ?? [], calendarUpdatedAt: calendar?.at ?? null, timeZone: zone,
+          note: "Calendar is the latest Shortcut snapshot; no live phone-calendar access. A task marked done isn't proof a bill was paid or an external action happened." };
+      },
+      update: async (raw) => withPhones((phones) => actDaily(deviceOf(phones, device), { ...raw, tz: zone }, now())),
+      organize: async ({ threadId, folder, title }) => withConversations(device, (st) => {
+        const t = threadFor(st, threadId);
+        if (folder) t.folderId = changeConversation(st, { action: "folder", name: folder }, now(), randomUUID().slice(0, 12)).folder.id;
+        if (title) t.title = String(title).trim().slice(0, 80);
+        return { title: t.title, folderId: t.folderId };
+      }),
     };
   }
   function withLinks(actions) {
@@ -544,6 +570,24 @@ export function createRelay({
     } catch (e) { return sendCloudError(res, e); }
   }
 
+  /** A recovery key is an account credential, never a Mac credential. Only its hash is stored. */
+  const recoveryHash = (code) => createHash("sha256").update(`echo-recovery:${String(code ?? "").replace(/[\s-]/g, "").toLowerCase()}`).digest("hex");
+  async function recoverAccount(req, res) {
+    if (req.method !== "POST") return send(res, 405, { message: "Enter your recovery key in Echo." });
+    if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] ?? "")) || req.headers["sec-fetch-site"] === "cross-site" ||
+      (req.headers.origin && ![`https://${req.headers.host}`, `http://${req.headers.host}`].includes(req.headers.origin))) return send(res, 403, { message: "Open Echo to recover your account." });
+    if (hitLimit(`recover:${clientIp(req)}`, 5)) return send(res, 429, { message: "Too many recovery attempts. Try again in a minute." });
+    try {
+      const body = await readJson(req, 2048);
+      const code = String(body.code ?? "").replace(/[\s-]/g, "");
+      if (!/^[0-9a-f]{64}$/i.test(code)) return send(res, 401, { message: "That recovery key isn't valid." });
+      const hash = recoveryHash(code), record = await store.get(`recovery:${hash}`);
+      const valid = record?.device && await withPhones((phones) => phones.devices[record.device]?.recoveryHash === hash, { save: false });
+      if (!valid) return send(res, 401, { message: "That recovery key isn't valid, or it was replaced." });
+      return send(res, 200, { device: record.device, cloudPass: signPass(keys.pass, { device: record.device, gen: 0, now: now(), phoneOnly: true }) });
+    } catch (e) { return sendCloudError(res, e); }
+  }
+
   /** The cloud pass on this request, if it is genuine and current. */
   async function cloudClaims(req) {
     await passGenLoaded;
@@ -562,6 +606,7 @@ export function createRelay({
   }
   const CLOUD_STATUS = { setup: 503, cap: 429, quota: 429, minute: 429, busy: 429, input: 400, failed: 502 };
   function sendCloudError(res, e) {
+    if (e?.input) return send(res, 400, { error: "input", message: e.message });
     if (e instanceof CloudError) return send(res, CLOUD_STATUS[e.kind] ?? 502, { error: e.kind, message: e.message, resetsAt: e.resetsAt ?? null, retryAfter: e.retryAfter ?? null });
     if (e?.status === 413) return send(res, 413, { error: "input", message: "That's too long to send." });
     if (e instanceof SyntaxError) return send(res, 400, { error: "input", message: "Bad request." });
@@ -583,11 +628,94 @@ export function createRelay({
       });
     }
     const device = claims.device;
+    const query = new URL(req.url, "http://x").searchParams;
+    if (req.method === "GET" && path === "/cloud/account") {
+      const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
+      return send(res, 200, { recoveryEnabled: Boolean(dev.recoveryHash), durable: store.remote, account: device.slice(-6) });
+    }
+    if (req.method === "GET" && path === "/cloud/conversations") {
+      try {
+        const result = await withConversations(device, (st) => query.get("id") ? { thread: threadFor(st, query.get("id")) } : conversationIndex(st), { save: false });
+        return send(res, 200, result.thread ? { thread: { ...result.thread, receipts: undefined } } : result);
+      } catch (e) { return sendCloudError(res, e); }
+    }
+    if (req.method === "GET" && path === "/cloud/today") {
+      try {
+        const tz = validTz(query.get("tz")) ? query.get("tz") : "UTC", today = localParts(now(), tz).date;
+        const [snaps, saved, cal] = await Promise.all([
+          withSnaps(device, (st) => st.items, { save: false }), memory.list(device), store.get(`cal:${device}`),
+        ]);
+        const result = await withPhones((phones) => {
+          const dev = deviceOf(phones, device), st = dailyState(dev);
+          const sources = [
+            ...snaps.filter((s) => s.snap.dueDate).map((s) => ({ id: `snap:${s.id}`, title: s.snap.title, date: s.snap.dueDate, type: "snap", ref: s.id, kind: "bill" })),
+            ...saved.flatMap((s) => (s.dates ?? []).map((d) => ({ id: `memory:${s.id}:${d.date}:${d.what}`, title: `${s.title} · ${d.what}`, date: d.date, type: "memory", ref: s.id, kind: /bill|invoice|pay|rent|due/i.test(`${s.kind} ${s.title} ${d.what}`) ? "bill" : "reminder" }))),
+          ];
+          for (const s of sources) {
+            if (st.tasks.length >= 200 || st.ignoredSources?.includes(s.id) || !/^\d{4}-\d{2}-\d{2}$/.test(s.date) || s.date < today || Date.parse(`${s.date}T09:00Z`) > now() + 365 * 86400_000 || st.tasks.some((t) => t.source?.id === s.id)) continue;
+            addDaily(dev, { text: s.title, kind: s.kind, when: `${s.date}T09:00`, tz, notify: false, source: s }, now(), randomUUID().slice(0, 12));
+          }
+          // Preserve the old reminder API while bringing existing captures into Today.
+          for (const r of dev.reminders ?? []) {
+            const source = { id: `legacy:${r.id}`, type: "reminder", ref: r.id };
+            if (st.tasks.length >= 200 || st.ignoredSources?.includes(source.id) || st.tasks.some((t) => t.source?.id === source.id)) continue;
+            const t = { id: `legacy-${r.id}`, text: r.text, kind: "reminder", when: r.when, tz: r.tz, repeat: null, next: null, notify: false, source, status: "open", occurrences: [{ id: `legacy-${r.id}:once`, at: r.at, when: r.when, status: "open", delivered: [] }] };
+            st.tasks.push(t);
+          }
+          const rows = dailyRows(dev, now()), completed = dailyRows(dev, now(), { completed: true });
+          const question = saved.slice().reverse().find((s) => s.kind === "note" && !(s.dates?.length));
+          const curiosity = question && !st.dismissed[today] ? { id: question.id, title: question.title, question: `You saved “${question.title}”. Want to explore what to do with it next?`, prompt: `Help me explore my saved note “${question.title}”. Look it up first, then ask one useful question.` } : null;
+          return { rows, completed, curiosity, notifications: subscriptions(dev).length > 0 };
+        });
+        const events = (cal?.events ?? []).map((e, i) => ({ ...e, id: `calendar-${i}`, kind: "calendar", readOnly: true })).filter((e) => localParts(Date.parse(e.start), tz).date >= today);
+        return send(res, 200, { ...result, events, calendarUpdatedAt: cal?.at ?? null, today, tz });
+      } catch (e) { return sendCloudError(res, e); }
+    }
+    if (req.method === "POST" && ["/cloud/account/key", "/cloud/conversations", "/cloud/conversations/migrate", "/cloud/today", "/cloud/today/action", "/cloud/curiosity/dismiss"].includes(path)) {
+      try {
+        if (rateLimited(`data:${device}`)) return send(res, 429, { message: "Too many changes. Try again shortly." });
+        const body = await readJson(req, CLOUD_BODY);
+        if (path === "/cloud/account/key") {
+          if (!store.remote && !limits.allowEphemeralRecovery) return send(res, 503, { message: "Recovery needs durable storage. This server is using temporary memory." });
+          const raw = randomBytes(32).toString("hex"), hash = recoveryHash(raw);
+          const previousHash = await withPhones(async (phones) => {
+            const dev = deviceOf(phones, device), old = dev.recoveryHash;
+            await store.set(`recovery:${hash}`, { device }); dev.recoveryHash = hash;
+            return old;
+          });
+          if (previousHash) await store.del(`recovery:${previousHash}`).catch(() => {});
+          return send(res, 200, { code: raw.match(/.{8}/g).join("-"), durable: store.remote });
+        }
+        if (path.startsWith("/cloud/conversations")) {
+          const result = await withConversations(device, (st) => path.endsWith("/migrate") ? migrateConversations(st, body, now(), randomUUID().slice(0, 12)) : changeConversation(st, body, now(), randomUUID().slice(0, 12)));
+          return send(res, 200, result);
+        }
+        const result = await withPhones((phones) => {
+          const dev = deviceOf(phones, device);
+          if (path === "/cloud/curiosity/dismiss") {
+            const date = localParts(now(), validTz(body.tz) ? body.tz : "UTC").date;
+            const st = dailyState(dev); st.dismissed = { ...Object.fromEntries(Object.entries(st.dismissed).slice(-30)), [date]: String(body.id).slice(0, 80) }; return { ok: true };
+          }
+          if (path === "/cloud/today") return { task: addDaily(dev, body, now(), randomUUID().slice(0, 12)) };
+          const item = actDaily(dev, body, now());
+          const t = dailyState(dev).tasks.find((t) => t.id === body.taskId);
+          if (t?.source?.type === "reminder") {
+            const r = (dev.reminders ?? []).find((r) => r.id === t.source.ref);
+            if (r && body.action === "done") r.sent = true;
+            if (r && body.action === "snooze") { r.at = item.snoozedUntil; r.sent = false; }
+          }
+          return { item };
+        });
+        return send(res, 200, result);
+      } catch (e) { return sendCloudError(res, e); }
+    }
     if (req.method === "GET") {
       if (path === "/cloud/push/key") return send(res, 200, { key: vapid.publicKey });
       if (path === "/cloud/briefing") {
         const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
-        return send(res, 200, { prefs: dev.prefs, subscribed: Boolean(dev.sub), latest: await store.get(`brief:${device}`).catch(() => null) });
+        const key = `brief:${device}${claims.phoneOnly ? ":phone" : ""}`;
+        let latest = await store.get(key).catch(() => null);
+        return send(res, 200, { prefs: dev.prefs, subscribed: Boolean(dev.sub), latest });
       }
       if (path === "/cloud/snaps") {
         const id = new URL(req.url, "http://x").searchParams.get("id");
@@ -639,11 +767,17 @@ export function createRelay({
         if (path === "/cloud/push/subscribe") {
           const sub = body.subscription;
           if (!validSubscription(sub) && !(pushAnyHost && sub?.endpoint)) return send(res, 400, { error: "input", message: "That notification subscription isn't valid." });
-          await withPhones((phones) => { deviceOf(phones, device).sub = { endpoint: String(sub.endpoint), keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } }; });
+          await withPhones((phones) => {
+            const dev = deviceOf(phones, device), id = /^[a-zA-Z0-9_-]{8,80}$/.test(body.installation) ? body.installation : "legacy";
+            dev.subscriptions ??= {};
+            if (!dev.subscriptions[id] && Object.keys(dev.subscriptions).length >= 10) throw Object.assign(new Error("Ten phones already receive notifications. Remove an older installation first."), { input: true });
+            dev.sub = { endpoint: String(sub.endpoint), keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } };
+            dev.subscriptions[id] = { sub: dev.sub, phoneOnly: !!claims.phoneOnly, lastBrief: "", delivered: {} };
+          });
           return send(res, 200, { ok: true });
         }
         if (path === "/cloud/push/unsubscribe") {
-          await withPhones((phones) => { deviceOf(phones, device).sub = null; });
+          await withPhones((phones) => { const dev = deviceOf(phones, device); if (body.installation && dev.subscriptions) { delete dev.subscriptions[body.installation]; dev.sub = Object.values(dev.subscriptions)[0]?.sub ?? null; } else { dev.sub = null; dev.subscriptions = {}; } });
           return send(res, 200, { ok: true });
         }
         if (path === "/cloud/push/test") {
@@ -660,7 +794,7 @@ export function createRelay({
         if (path === "/cloud/briefing/now") {
           const dev = await withPhones((phones) => { const d = deviceOf(phones, device); d.prefs = cleanPrefs(body.prefs ?? {}, d.prefs); return d; });
           const b = await buildBriefing({ prefs: dev.prefs, dev, now: now(), tools: briefingTools, digest: claims.phoneOnly ? null : await store.get("digest").catch(() => null), macOnline, phoneCal: await store.get(`cal:${device}`).catch(() => null) });
-          await store.set(`brief:${device}`, b, 3 * 86400).catch(() => {});
+          await store.set(`brief:${device}${claims.phoneOnly ? ":phone" : ""}`, b, 3 * 86400).catch(() => {});
           return send(res, 200, { briefing: b });
         }
         if (path === "/cloud/reminders") {
@@ -741,7 +875,14 @@ export function createRelay({
           const b = await readJson(req, CLOUD_BODY);
           const context = b.context ?? {};
           if (path === "/cloud/browse/plan") return send(res, 200, await cloud.browsePlan({ task: b.task, page: b.page, context }));
-          if (path === "/cloud/browse/report") return send(res, 200, await cloud.browseReport({ task: b.task, plan: b.plan, notes: b.notes, sources: b.sources, context }));
+          if (path === "/cloud/browse/report") {
+            const result = await cloud.browseReport({ task: b.task, plan: b.plan, notes: b.notes, sources: b.sources, context });
+            if (b.threadId && /^[a-zA-Z0-9_-]{8,80}$/.test(b.requestId)) await withConversations(device, (st) => recordTurn(threadFor(st, b.threadId), {
+              requestId: b.requestId, text: `🌐 ${String(b.task).slice(0, 2000)}`, now: now(),
+              result: { reply: result.report, actions: [], sources: (Array.isArray(b.sources) ? b.sources : []).slice(0, 4).filter((s) => /^https?:\/\//.test(s?.url)).map((s) => ({ title: String(s.title).slice(0, 100), url: String(s.url).slice(0, 2000) })), saved: [], references: [], captures: [] },
+            }));
+            return send(res, 200, result);
+          }
           return send(res, 200, await cloud.browseStep({
             task: b.task, plan: b.plan, current: b.current, attempt: b.attempt, lastFail: b.lastFail, memory: b.memory,
             history: b.history, notes: b.notes, page: b.page, userSaid: b.userSaid, blocked: Array.isArray(b.blocked) ? b.blocked.slice(0, 20).map(String) : [], context,
@@ -863,13 +1004,20 @@ export function createRelay({
         const body = await readJson(req, path === "/cloud/voice" ? CLOUD_VOICE_BODY : CLOUD_BODY);
         const context = { ...(body.context && typeof body.context === "object" ? body.context : {}), macOnline };
         const mem = await memoryFor(device, context.tz).catch(() => null);
-        let result;
-        if (path === "/cloud/voice") {
-          const audio = String(body.audio ?? "");
-          if (!/^[A-Za-z0-9+/=]{100,}$/.test(audio)) return send(res, 400, { error: "input", message: "That recording didn't come through." });
-          result = await cloud.chat({ history: body.history, audio, context, memory: mem });
-        } else result = await cloud.chat({ history: body.history, text: body.text, context, memory: mem });
-        for (const a of result.actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
+        if (path === "/cloud/voice" && !/^[A-Za-z0-9+/=]{100,}$/.test(String(body.audio ?? ""))) return send(res, 400, { error: "input", message: "That recording didn't come through." });
+        const requestId = /^[a-zA-Z0-9_-]{8,80}$/.test(body.requestId) ? body.requestId : randomUUID();
+        const threadId = body.threadId ? String(body.threadId).slice(0, 80) : null;
+        // A separate turn lock permits memory and folder tools to change their own store keys.
+        const result = await withKey(`turn:${device}:${threadId ?? "legacy"}`, () => ({}), async () => {
+          const t = threadId ? await withConversations(device, (st) => threadFor(st, threadId), { save: false }) : null;
+          const previous = t?.receipts.find((r) => r.id === requestId); if (previous) return previous.result;
+          const history = t ? t.messages.map((m) => ({ role: m.from === "you" ? "user" : "echo", text: m.text })) : body.history;
+          const r = await cloud.chat({ history, text: path === "/cloud/chat" ? body.text : undefined, audio: path === "/cloud/voice" ? body.audio : undefined,
+            context: { ...context, threadId }, memory: mem });
+          for (const a of r.actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
+          if (t) await withConversations(device, (st) => recordTurn(threadFor(st, threadId), { requestId, text: path === "/cloud/chat" ? String(body.text).slice(0, 4000) : null, result: r, now: now() }));
+          return r;
+        }, { save: false });
         return send(res, 200, result);
       } catch (e) { return sendCloudError(res, e); }
     }
@@ -1051,8 +1199,9 @@ export function createRelay({
     if (path === "/healthz") return send(res, 200, { ok: true, echo: online() ? "online" : "offline", app: APP_VERSION, phone: { brain: Boolean(cloud), store: store.remote ? "upstash" : "memory", push: true } });
     if (path === "/version") return send(res, 200, { app: APP_VERSION });
     if (path === "/phone/session") return void phoneSession(req, res);
+    if (path === "/phone/recover") return void recoverAccount(req, res);
     if (path === "/b/selftest" && req.method === "GET") return void browseSelfTest().then((r) => send(res, 200, r));
-    if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path);
+    if (path.startsWith("/cloud/")) return void cloudRoute(req, res, path).catch((e) => { if (!res.headersSent) sendCloudError(res, e); });
     if (path.startsWith("/b/")) return void browseRoute(req, res, url).catch(() => { if (!res.headersSent) sendPage(res, 502, notePage("Couldn't open that page", "Something went wrong. Try again.")); });
     if (path === "/cron/tick" && req.method === "POST") return void cronTick(req, res);
     const cal = /^\/cal\/([A-Za-z0-9_-]{20,40})$/.exec(path);

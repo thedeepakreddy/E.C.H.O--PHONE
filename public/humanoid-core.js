@@ -289,6 +289,7 @@
   ----------------------------------------------------------------*/
   var shared = {
     status: "idle",
+    expression: "attentive", expressionAt: 0,
     level: 0,
     assembleAt: performance.now(),
     /* where the head is looking, and where it wants to look: -1..1 on each
@@ -404,6 +405,8 @@
     function statusTint(status) {
       if (status === "error") return { rim: [255, 120, 104], deep: [176, 58, 54], core: [255, 78, 52], hot: [255, 178, 140] };
       if (status === "asleep") return { rim: [96, 168, 200], deep: [30, 90, 124], core: [150, 118, 84], hot: [198, 168, 126] };
+      if (shared.expression === "curious") return { rim: [206, 186, 255], deep: [106, 88, 210], core: [169, 139, 255], hot: [242, 229, 255] };
+      if (shared.expression === "celebrate" || shared.expression === "encouraging") return { rim: [156, 255, 211], deep: [38, 180, 135], core: [62, 230, 176], hot: [220, 255, 230] };
       return { rim: [168, 244, 255], deep: [38, 162, 216], core: [255, 126, 24], hot: [255, 232, 168] };
     }
 
@@ -412,6 +415,9 @@
       if (!W || !H) return;
       var t = now * 0.001;
       var status = shared.status;
+      var reactionAge = Math.max(0, (now - shared.expressionAt) / 1000);
+      var reaction = reduceMotion ? 0 : Math.max(0, 1 - reactionAge / 12);
+      if (reactionAge > 12 && shared.expression !== "attentive") { shared.expression = "attentive"; document.body.dataset.expression = "attentive"; }
       var level = shared.level;
       var tint = statusTint(status);
 
@@ -441,6 +447,9 @@
       var breath = 1 + Math.sin(t * 0.78) * 0.006;
       var speakAmp = status === "speaking" ? level : 0;
       var headBob = -(0.014 * speakAmp) + fsin(t * 1.7) * 0.007 * speakAmp;
+      if (shared.expression === "encouraging" || shared.expression === "celebrate") headBob += fsin(reactionAge * 4) * 0.028 * reaction;
+      var headRoll = shared.expression === "curious" ? 0.11 * reaction : shared.expression === "thoughtful" ? -0.065 * reaction : 0;
+      if (shared.expression === "celebrate") { coreAmp += 0.35 * reaction; sparkRate += reaction; }
       var coreCY = -0.02;
       var visorRX = 0.320 * (0.95 + 0.05 * coreR), visorH = 0.126 * coreR;
 
@@ -474,8 +483,8 @@
             py += speakAmp * 0.078 * mz + fsin(px * 26 - t * 9.0) * 0.016 * mz * speakAmp;
             px *= 1 - 0.055 * speakAmp * mz;
           }
-          py += headBob * (1 - smoothstep(0.30, 0.56, py));
         }
+        if ((part === 0 || part === 3) && py < 0.58) py += headBob * (1 - smoothstep(0.30, 0.56, py));
         px *= breath; py = py * breath;
 
         /* Vision Pro kidney: one unbroken superelliptical top edge, ends
@@ -510,6 +519,7 @@
           var z = cdz[i] * RZ;
           px = (px * cosYaw + z * sinYaw) + leanX * hold;
           py += z * pitch + leanY * hold;
+          if (headRoll) { var hx = px; px -= py * headRoll * hold; py += hx * headRoll * hold; }
         }
 
         /* assembly */
@@ -802,11 +812,14 @@
     unitW: 0.62, unitH: 0.43, originX: 0.5, originY: 0.352, seed: 42,
     figW: 720, stride: 2, dprCap: 2
   });
+  var chatCanvas = document.getElementById("chat-core-canvas");
+  var chatStage = chatCanvas ? createStage(chatCanvas, { figW: 180, stride: 12, dprCap: 2, unitW: 0.53, unitH: 0.48, originY: 0.32, seed: 42 }) : null;
 
   if (typeof ResizeObserver === "function") {
-    new ResizeObserver(function () { stage.resize(); }).observe(canvas);
+    new ResizeObserver(function () { stage.resize(); if (reduceMotion) stage.draw(performance.now()); }).observe(canvas);
+    if (chatStage) new ResizeObserver(function () { chatStage.resize(); chatStage.draw(performance.now()); }).observe(chatCanvas);
   } else {
-    window.addEventListener("resize", function () { stage.resize(); });
+    window.addEventListener("resize", function () { stage.resize(); if (reduceMotion) stage.draw(performance.now()); });
   }
   stage.resize();
 
@@ -866,8 +879,15 @@
 
   var bootAt = performance.now();
   window.echoCore = {
+    react: function (expression) {
+      if (["attentive", "curious", "thoughtful", "encouraging", "celebrate"].indexOf(expression) < 0) expression = "attentive";
+      shared.expression = expression; shared.expressionAt = performance.now(); document.body.dataset.expression = expression;
+      if (chatStage) { chatStage.resize(); updateLevel(performance.now(), 16); chatStage.draw(performance.now()); }
+      if (reduceMotion) { stage.draw(performance.now()); }
+    },
+    avatar: function () { if (chatStage) { chatStage.resize(); updateLevel(performance.now(), 16); chatStage.draw(performance.now()); } },
     /* Play the assembly again: the particles gather into the figure. */
-    replay: function () { if (!reduceMotion) shared.assembleAt = performance.now(); front(); stage.resize(); },
+    replay: function () { if (!reduceMotion) shared.assembleAt = performance.now(); front(); stage.resize(); if (reduceMotion) { updateLevel(performance.now(), 16); stage.draw(performance.now()); } },
     /* Burst apart while Echo speaks on the phone; false gathers it back. */
     burst: function (on) { shared.exTarget = on ? 1 : 0; if (!on) shared.wsTarget = 0; },
     /* Spell a few words with the burst's particles; null lets them go. */
@@ -886,17 +906,21 @@
   /* 30 fps while it moves; nothing at all while Home is hidden or the app is
      in the background, so it costs no battery anywhere else. */
   var FRAME_MS = 1000 / 30;
-  var last = bootAt, nextPaintAt = 0;
+  var last = bootAt, nextPaintAt = 0, lastAvatar = "";
 
   function frame(now) {
     requestAnimationFrame(frame);
-    if (document.hidden || !stage.visible) return;
+    if (document.hidden || (!stage.visible && !(chatStage && chatStage.visible))) return;
     if (now < nextPaintAt) return;
     nextPaintAt = now + FRAME_MS;
     var dt = Math.min(now - last, 50);
     last = now;
     updateLevel(now, dt);
-    stage.draw(now);
+    if (stage.visible) stage.draw(now);
+    var avatarState = shared.status + ":" + shared.expression;
+    if (chatStage && chatStage.visible && (shared.status !== "idle" || shared.expression !== "attentive" || avatarState !== lastAvatar || now - shared.assembleAt < 2100)) {
+      chatStage.draw(now); lastAvatar = avatarState;
+    }
   }
   requestAnimationFrame(frame);
 })();

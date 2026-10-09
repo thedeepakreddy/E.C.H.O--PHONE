@@ -44,6 +44,7 @@
   <button class="cta big-btn" id="get-started">Get started</button>
   <p class="sub small center" id="start-note">Use Echo on your phone. Connect your Mac later, if you want.</p>
   <p class="err center" id="start-error" role="alert"></p>
+  <button class="text-btn center" data-open="account">Restore my Echo</button>
 </section>
 
 <!-- ============ YOUR MAC (pushed, from Settings) ============ -->
@@ -142,14 +143,16 @@
       </div>
     </div>
     <div class="glass strip" id="activity-strip"><span class="dot pulse cyan"></span><span class="clamp1" id="activity-line">Waiting for Echo…</span></div>
+    <div class="echo-curiosity" id="echo-curiosity" hidden></div>
   </div>
 </section>
 
 <!-- ============ CHAT ============ -->
 <section id="v-chat" class="view chat" aria-label="Chat" hidden>
   <header class="glass chat-head">
-    <img class="avatar" src="/icons/icon-192.png" alt="">
-    <div><b>Echo</b><span class="presence" id="presence">online</span></div>
+    <canvas class="avatar" id="chat-core-canvas" role="img" aria-label="Echo's conversation reaction"></canvas>
+    <button class="conversation-title" id="conversation-open" aria-label="Open conversations and folders"><b id="conversation-title">Echo</b><span class="presence" id="presence">on your phone</span></button>
+    <button class="bubble b44" id="conversation-new" aria-label="New conversation">+</button>
     <button class="bubble b44" id="chat-talk" aria-label="Talk to Echo"><svg class="i20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></button>
   </header>
   <div class="glass banner" id="chat-banner" role="status" hidden>
@@ -177,7 +180,7 @@
 
 <!-- ============ MISSIONS ============ -->
 <section id="v-missions" class="view list-view" aria-label="Missions" hidden>
-  <header class="top"><h1>Missions</h1></header>
+  <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Missions</h1></header>
   <div class="glass seg" role="tablist" aria-label="Missions view">
     <button role="tab" data-seg="missions" aria-selected="true">Missions</button>
     <button role="tab" data-seg="agents" aria-selected="false">Agents</button>
@@ -194,7 +197,7 @@
 <!-- ============ WORLD ============ -->
 <section id="v-world" class="view list-view world" aria-label="World" hidden>
   <img class="world-bg" src="/img/osiris.jpg" alt="" aria-hidden="true">
-  <header class="top"><div><h1>World</h1><p class="sub small" id="world-updated">Live from Osiris</p></div>
+  <header class="top push"><button class="glass pill back" data-back>‹ Back</button><div class="grow"><h1>World</h1><p class="sub small" id="world-updated">Live from Osiris</p></div>
     <a class="glass pill" href="https://osirisai.live" target="_blank" rel="noopener">Open in Osiris ↗</a></header>
   <div class="scroll" id="world-scroll">
     <div class="glass globe"><img src="/img/osiris.jpg" alt="The Osiris globe"><span class="glass pill live"><span class="dot red pulse"></span>LIVE</span></div>
@@ -292,7 +295,7 @@
     </div>
     <p class="group-title">Security</p>
     <div class="glass list">
-      <div class="row"><span class="grow">API keys</span><span class="sub small row-i"><svg class="i13" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>On your Mac only</span></div>
+      <div class="row"><span class="grow">API keys</span><span class="sub small row-i"><svg class="i13" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Kept off this phone</span></div>
       <button class="row" id="sign-out"><span class="grow">Sign out of this phone</span></button>
       <button class="row" id="signout-all"><span class="grow">Sign out every phone</span></button>
       <button class="row danger-row" id="power-btn">Power off Echo…</button>
@@ -351,6 +354,41 @@
   <div class="scroll" id="mem-body"></div>
 </section>
 
+<!-- Daily work belongs here; capture through conversation or add an exact time. -->
+<section id="v-today" class="view list-view" aria-label="Today" hidden>
+  <header class="top"><div><p class="sub small" id="today-date"></p><h1>Today</h1></div><div class="head-btns"><button class="bubble b44" id="today-refresh" aria-label="Refresh Today">↻</button><button class="bubble b44" id="today-add" aria-label="Add a commitment">+</button></div></header>
+  <div class="scroll daily-scroll">
+    <form class="glass field" id="today-capture"><label class="sr" for="today-thought">Tell Echo what not to forget</label><input id="today-thought" placeholder="Don’t let me forget…" maxlength="2000" enterkeyhint="send" autocomplete="off"><button class="bubble b44" aria-label="Capture with Echo">↑</button></form>
+    <p class="sub small daily-hint">Tell me once. I’ll keep the thread.</p>
+    <div id="today-notifications" hidden><button class="glass daily-permission" id="today-allow">Allow reminder notifications <span class="sub small">So Echo can reach you when the app is closed</span></button></div>
+    <div id="today-body" aria-live="polite"></div>
+  </div>
+</section>
+
+<section id="v-more" class="view list-view" aria-label="More" hidden>
+  <header class="top"><div><p class="sub small">A little more reach</p><h1>More</h1></div></header>
+  <div class="scroll">
+    <div class="glass list more-list">
+      <button class="row" data-open="browser"><span class="grow"><b>Echo’s Browser</b><span class="sub small">Let Echo research and work on the web</span></span><span>↗</span></button>
+      <button class="row" data-open="missions"><span class="grow"><b>Mac missions</b><span class="sub small">Follow work on your connected Mac</span></span><span>›</span></button>
+      <button class="row" data-open="world"><span class="grow"><b>World</b><span class="sub small">What’s happening beyond your day</span></span><span>›</span></button>
+      <button class="row" id="more-snap"><span class="grow"><b>Help me handle this</b><span class="sub small">Bring a letter, bill or screenshot to Echo</span></span><span>＋</span></button>
+      <button class="row" id="more-delegate"><span class="grow"><b>Do this for me</b><span class="sub small">Describe the result you need</span></span><span>›</span></button>
+      <button class="row" data-open="account"><span class="grow"><b>Your Echo account</b><span class="sub small">Recovery and sync across your phones</span></span><span>›</span></button>
+      <button class="row" data-open="settings"><span class="grow"><b>Settings</b><span class="sub small">Voice, calendar, notifications and optional Mac</span></span><span>›</span></button>
+    </div>
+  </div>
+</section>
+
+<section id="v-account" class="view list-view" aria-label="Account recovery and sync" hidden>
+  <header class="top push"><button class="glass pill back" id="account-back">‹ Back</button><h1>Your Echo</h1></header>
+  <div class="scroll">
+    <section class="glass bcard"><h3>Keep your Echo with you</h3><p class="sub small" id="account-status">Your tasks, Saved items and Phone conversations sync when you restore the same account on another phone.</p><button class="cta big-btn" id="account-key">Create a recovery key</button><div id="account-key-result" hidden><label for="recovery-key" class="sub small">Save this somewhere private. It can restore your account.</label><textarea id="recovery-key" readonly rows="4" spellcheck="false"></textarea><button class="glass big-btn" id="account-copy">Copy recovery key</button><p class="sub small">Replacing this key invalidates the previous key. Existing signed-in phones remain connected.</p></div></section>
+    <section class="glass bcard"><h3>Restore or connect another phone</h3><p class="sub small">Enter the key from your other phone. This opens that account and replaces the account shown on this installation. Mac sign-in stays separate.</p><form id="account-recover"><label class="sr" for="account-code">Recovery key</label><textarea id="account-code" placeholder="Paste your recovery key" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="100"></textarea><button class="cta big-btn" type="submit">Restore my Echo</button></form></section>
+    <p class="err" id="account-error" role="alert"></p>
+  </div>
+</section>
+
 <!-- ============ BRIEFING (pushed) ============ -->
 <section id="v-briefing" class="view list-view" aria-label="Briefing" hidden>
   <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Today</h1><button class="bubble b44" id="brief-refresh" aria-label="Brief me now"><svg class="i18" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg></button></header>
@@ -372,10 +410,10 @@
 <!-- ============ TAB BAR ============ -->
 <nav class="glass tabbar" aria-label="Pages" id="tabbar" hidden>
   <button data-tab="home" aria-current="page"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>Echo</button>
+  <button data-tab="today"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4M16 3v4M4 10h16M8 15l3 3 5-5"/></svg>Today</button>
   <button data-tab="chat"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18l-1 3 4-1.5A9 8 0 1 0 5 18z"/></svg>Chat<span class="badge" id="chat-badge" hidden></span></button>
-  <button data-tab="missions"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>Missions</button>
-  <button data-tab="browser"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>Browser</button>
-  <button data-tab="world"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3.2 3 3.2 14 0 17M12 3.5c-3.2 3-3.2 14 0 17"/></svg>World</button>
+  <button data-tab="memory"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>Saved</button>
+  <button data-tab="more"><svg class="i22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>More</button>
 </nav>
 
 <!-- ============ SHEETS ============ -->
@@ -489,6 +527,7 @@
 
 <div class="toast glass" id="toast" role="status" aria-live="polite"></div>
 <script src="/humanoid-core.js" defer></script>
+<script src="/experience.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>
