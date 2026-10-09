@@ -603,7 +603,7 @@
     await ensurePhoneSession();
     const r = await fetch(path, {
       method: json ? "POST" : "GET",
-      headers: { "x-echo-pass": PASS, ...(json ? { "content-type": "application/json" } : {}) },
+      headers: { "x-echo-pass": PASS, "x-echo-installation": INSTALLATION, ...(json ? { "content-type": "application/json" } : {}) },
       body: json ? JSON.stringify(json) : undefined,
       signal,
     });

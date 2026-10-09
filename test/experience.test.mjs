@@ -12,8 +12,8 @@ async function fixture(replies = []) {
   const relay = createRelay({ secret: SECRET, now: () => NOW, store, limits: { allowEphemeralRecovery: true }, fetchJson: async () => ({}), gemini: { model: "test", generate: async (body) => { seen.push(structuredClone(body)); return replies.shift() ?? text("Hello."); } } });
   const server = http.createServer(relay.handler); await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const request = async (path, body, pass) => {
-    const r = await fetch(base + path, { method: body === undefined ? "GET" : "POST", headers: { ...(pass ? { "x-echo-pass": pass } : {}), "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const request = async (path, body, pass, installation) => {
+    const r = await fetch(base + path, { method: body === undefined ? "GET" : "POST", headers: { ...(pass ? { "x-echo-pass": pass } : {}), ...(installation ? { "x-echo-installation": installation } : {}), "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: r.status, ...(await r.json()) };
   };
   return { base, relay, store, seen, request, close: () => new Promise((r) => { server.closeAllConnections(); server.close(r); }) };
@@ -48,6 +48,26 @@ test("conversations migrate only Phone messages once, sync folders and enforce i
     await f.request("/cloud/conversations", { action: "deleteFolder", id: folder.folder.id }, pass);
     assert.equal((await f.request("/cloud/conversations", undefined, pass)).threads[0].folderId, "inbox");
     assert.equal((await f.request("/cloud/conversations", undefined)).status, 401);
+  } finally { await f.close(); }
+});
+test("migration accommodates a full existing local conversation cache", async () => {
+  const f = await fixture(); try {
+    const { cloudPass: pass } = await f.request("/phone/session", {});
+    const messages = Array.from({ length: 400 }, (_, i) => ({ k: `message-${i}`, at: NOW + i, from: i % 2 ? "echo" : "you", src: "phone", text: "A substantial earlier conversation. ".repeat(30) }));
+    assert.ok(Buffer.byteLength(JSON.stringify(messages)) > 256 * 1024);
+    const result = await f.request("/cloud/conversations/migrate", { installation: "full-cache-installation", messages }, pass);
+    assert.equal(result.status, 200); assert.equal(result.thread.messages.length, 400);
+  } finally { await f.close(); }
+});
+test("a restored phone needs its own notification subscription", async () => {
+  const f = await fixture(); try {
+    const session = await f.request("/phone/session", {}), phones = await f.store.get("phones"), sub = { endpoint: "https://web.push.apple.com/fixture", keys: {} };
+    phones.devices[session.device].sub = sub; phones.devices[session.device].subscriptions = { "first-phone": { sub, phoneOnly: true } };
+    await f.store.set("phones", phones);
+    assert.equal((await f.request("/cloud/today", undefined, session.cloudPass, "first-phone")).notifications, true);
+    assert.equal((await f.request("/cloud/today", undefined, session.cloudPass, "other-phone")).notifications, false);
+    assert.equal((await f.request("/cloud/briefing", undefined, session.cloudPass, "other-phone")).subscribed, false);
+    assert.equal((await f.request("/cloud/push/test", {}, session.cloudPass, "other-phone")).status, 409);
   } finally { await f.close(); }
 });
 test("conversation captures are durable, deduplicated and use server history across installations", async () => {

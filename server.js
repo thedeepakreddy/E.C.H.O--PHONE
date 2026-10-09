@@ -628,6 +628,8 @@ export function createRelay({
       });
     }
     const device = claims.device;
+    const installation = /^[a-zA-Z0-9_-]{8,80}$/.test(req.headers["x-echo-installation"]) ? req.headers["x-echo-installation"] : null;
+    const subForInstallation = (dev) => installation && dev.subscriptions ? dev.subscriptions[installation]?.sub ?? null : dev.sub;
     const query = new URL(req.url, "http://x").searchParams;
     if (req.method === "GET" && path === "/cloud/account") {
       const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
@@ -665,7 +667,7 @@ export function createRelay({
           const rows = dailyRows(dev, now()), completed = dailyRows(dev, now(), { completed: true });
           const question = saved.slice().reverse().find((s) => s.kind === "note" && !(s.dates?.length));
           const curiosity = question && !st.dismissed[today] ? { id: question.id, title: question.title, question: `You saved “${question.title}”. Want to explore what to do with it next?`, prompt: `Help me explore my saved note “${question.title}”. Look it up first, then ask one useful question.` } : null;
-          return { rows, completed, curiosity, notifications: subscriptions(dev).length > 0 };
+          return { rows, completed, curiosity, notifications: Boolean(subForInstallation(dev)) };
         });
         const events = (cal?.events ?? []).map((e, i) => ({ ...e, id: `calendar-${i}`, kind: "calendar", readOnly: true })).filter((e) => localParts(Date.parse(e.start), tz).date >= today);
         return send(res, 200, { ...result, events, calendarUpdatedAt: cal?.at ?? null, today, tz });
@@ -674,7 +676,7 @@ export function createRelay({
     if (req.method === "POST" && ["/cloud/account/key", "/cloud/conversations", "/cloud/conversations/migrate", "/cloud/today", "/cloud/today/action", "/cloud/curiosity/dismiss"].includes(path)) {
       try {
         if (rateLimited(`data:${device}`)) return send(res, 429, { message: "Too many changes. Try again shortly." });
-        const body = await readJson(req, CLOUD_BODY);
+        const body = await readJson(req, path === "/cloud/conversations/migrate" ? CLOUD_VOICE_BODY : CLOUD_BODY);
         if (path === "/cloud/account/key") {
           if (!store.remote && !limits.allowEphemeralRecovery) return send(res, 503, { message: "Recovery needs durable storage. This server is using temporary memory." });
           const raw = randomBytes(32).toString("hex"), hash = recoveryHash(raw);
@@ -715,7 +717,7 @@ export function createRelay({
         const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
         const key = `brief:${device}${claims.phoneOnly ? ":phone" : ""}`;
         let latest = await store.get(key).catch(() => null);
-        return send(res, 200, { prefs: dev.prefs, subscribed: Boolean(dev.sub), latest });
+        return send(res, 200, { prefs: dev.prefs, subscribed: Boolean(subForInstallation(dev)), latest });
       }
       if (path === "/cloud/snaps") {
         const id = new URL(req.url, "http://x").searchParams.get("id");
@@ -781,10 +783,10 @@ export function createRelay({
           return send(res, 200, { ok: true });
         }
         if (path === "/cloud/push/test") {
-          const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
-          if (!dev.sub) return send(res, 409, { error: "input", message: "Notifications aren't on for this phone yet." });
-          const r = await push(dev.sub, { title: "Echo", body: "Notifications are on. Your briefing and reminders will arrive here.", url: "/", tag: "test" });
-          if (r.gone) await withPhones((phones) => { deviceOf(phones, device).sub = null; });
+          const dev = await withPhones((phones) => deviceOf(phones, device), { save: false }), sub = subForInstallation(dev);
+          if (!sub) return send(res, 409, { error: "input", message: "Notifications aren't on for this phone yet." });
+          const r = await push(sub, { title: "Echo", body: "Notifications are on. Your briefing and reminders will arrive here.", url: "/", tag: "test" });
+          if (r.gone) await withPhones((phones) => { const d = deviceOf(phones, device); if (installation && d.subscriptions) { delete d.subscriptions[installation]; d.sub = Object.values(d.subscriptions)[0]?.sub ?? null; } else d.sub = null; });
           return send(res, r.ok ? 200 : 502, { ok: r.ok, message: r.ok ? "Sent." : r.gone ? "This phone's notifications were turned off. Turn them on again." : "Apple didn't accept it. Try again." });
         }
         if (path === "/cloud/briefing/prefs") {
