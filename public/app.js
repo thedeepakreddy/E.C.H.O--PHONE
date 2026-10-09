@@ -144,7 +144,7 @@
     if (TABS.includes(view)) { lastTab = view; store.set("echo_tab", view); }
     if (view === "home" && window.echoCore) window.echoCore.replay(); // the figure assembles every time
     if (view === "chat") { unread = 0; renderBadge(); setTimeout(scrollMessages, 30); pollChat(); window.echoCore?.avatar(); }
-    if (view === "world") loadWorld();
+    if (view === "world") loadWorld(); else clearTimeout(worldTimer);
     if (view === "settings") { loadPhoneCal(); renderMacPage(); }
     if (view === "mac") renderMacPage();
     if (view === "browser") openBrowser();
@@ -844,6 +844,7 @@
     synthesis: window.speechSynthesis,
     utterance: (text) => new SpeechSynthesisUtterance(text),
     onStart: speechStart,
+    onWord: (_word, spoken) => { caption.textContent = spoken; },
     onPhrase: (text) => window.echoCore?.spell(text),
     onEnd: speechEnd,
     timeout: VOICE_REPLY_MS,
@@ -883,18 +884,18 @@
     // One reply at a time: a new one replaces anything queued, so nothing old can play later.
     stopSpeaking();
     const voices = speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang));
-    const voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices[0] || null;
+    const voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices.find((v) => v.localService) || voices[0] || null;
     return speechPlayer.play(text, voice);
   }
 
   // ---------- Echo speaking on the phone: the figure bursts, the words show ----------
-  // Every queued spoken phrase forms particle words. Chat keeps the complete
-  // written reply; this accessible transcript never becomes ordinary captions.
+  // Word timing forms particle captions independently of spoken sentences.
+  // Chat keeps the complete reply; the accessible transcript follows speech.
   const caption = $("speech-caption");
   let settleTimer = 0;
-  function speechStart(text) {
+  function speechStart() {
     clearTimeout(settleTimer); settleTimer = 0;
-    caption.textContent = String(text);
+    caption.textContent = "";
     window.echoCore?.burst(true);
   }
   function speechEnd(completed) {
@@ -1468,18 +1469,40 @@
   }
 
   // ---------- world ----------
-  let world = null, worldAt = 0, wf = "all";
-  async function loadWorld(force) {
-    if (!force && world && Date.now() - worldAt < 4 * 60_000) return renderWorld();
-    try { world = await pub("/world"); worldAt = Date.now(); renderWorld(); }
-    catch { if (!world) { const l = $("world-list"); clear(l); l.appendChild(el("p", "sub empty", "Osiris isn't answering right now. Try again in a minute.")); } }
+  const WORLD_REFRESH_MS = 30_000;
+  let world = null, worldTimer = 0, worldLoading = null, worldUnavailable = false, wf = "all";
+  async function loadWorld() {
+    clearTimeout(worldTimer);
+    if (worldLoading) return worldLoading;
+    worldLoading = (async () => {
+      try {
+        world = await pub("/world"); worldUnavailable = false;
+        renderWorld();
+      } catch {
+        worldUnavailable = true;
+        if (world) renderWorld();
+        else { const l = $("world-list"); clear(l); l.appendChild(el("p", "sub empty", "Osiris isn't answering right now. Retrying shortly…")); }
+      }
+    })().finally(() => {
+      worldLoading = null;
+      if (currentView === "world" && !document.hidden) worldTimer = setTimeout(loadWorld, WORLD_REFRESH_MS);
+    });
+    return worldLoading;
   }
+  document.addEventListener("visibilitychange", () => {
+    clearTimeout(worldTimer);
+    if (!document.hidden && currentView === "world") loadWorld();
+  });
+  window.addEventListener("pagehide", () => clearTimeout(worldTimer));
+  window.addEventListener("pageshow", () => { if (currentView === "world" && !document.hidden) loadWorld(); });
   document.querySelectorAll("[data-wf]").forEach((b) => b.addEventListener("click", () => {
     wf = b.dataset.wf; document.querySelectorAll("[data-wf]").forEach((x) => x.setAttribute("aria-selected", String(x === b))); renderWorld();
   }));
   function renderWorld() {
     if (!world) return;
-    $("world-updated").textContent = `Live from Osiris · ${clock(world.updatedAt)}`;
+    $("world-updated").textContent = worldUnavailable || world.staleFeeds?.length === 4
+      ? `Osiris unavailable · Last copy ${clock(world.updatedAt)}`
+      : `Osiris · Checked ${clock(world.checkedAt ?? world.updatedAt)}${world.staleFeeds?.length ? " · Some feeds unavailable" : ""}`;
     const stats = $("world-stats"); clear(stats);
     const stat = (n, label, color) => { const s = el("div", "glass stat"); const b = el("b", "", n); b.style.color = color; s.append(b, el("span", "sub tiny", label)); return s; };
     stats.append(stat(world.conflicts.length, "Conflicts", "#ff8a8a"), stat(world.earthquakes.count, "Quakes", "#ffc27a"),

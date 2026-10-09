@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { createRelay, summariseWorld, LOGIN_LIMIT } from "../server.js";
+import { createRelay, summariseWorld, WORLD_TTL_MS, LOGIN_LIMIT } from "../server.js";
 import { metWeather } from "../lib/weather.js";
 
 const SECRET = "s".repeat(48);
@@ -170,24 +170,47 @@ test("the world summary reads Osiris's feeds defensively", () => {
   assert.deepEqual(empty.conflicts, []);
 });
 
-test("/world is cached, and a failed refresh keeps the last good copy", async () => {
-  let t = 1_000_000, calls = 0, fail = false;
+test("/world refreshes after 30 seconds, coalesces requests and retains failed feeds honestly", async () => {
+  let t = 1_000_000, calls = 0, fail = "", revision = 1;
   const fetchJson = async (url) => {
-    calls++;
-    if (fail) throw new Error("down");
-    if (url.endsWith("/conflicts")) return { zones: [{ id: "z", label: "Z" }] };
+    calls++; await new Promise((r) => setTimeout(r, 10));
+    if (fail === "all" || url.endsWith("/" + fail)) throw new Error("down");
+    if (url.endsWith("/conflicts")) return { zones: [{ id: "z", label: `Z${revision}` }], timestamp: new Date(t - 5000).toISOString() };
     return {};
   };
   const r = await start({ fetchJson, now: () => t });
+  const get = () => fetch(r.base + "/world").then((x) => x.json());
   try {
-    assert.equal((await fetch(r.base + "/world").then((x) => x.json())).conflicts[0].label, "Z");
-    await fetch(r.base + "/world");
-    assert.equal(calls, 4, "the second request is served from the cache");
-    t += 10 * 60_000;
-    fail = true;
-    const stale = await fetch(r.base + "/world");
-    assert.equal(stale.status, 200);
-    assert.equal((await stale.json()).conflicts[0].label, "Z");
+    assert.equal(WORLD_TTL_MS, 30_000);
+    const first = await get(); assert.equal(first.conflicts[0].label, "Z1");
+    assert.equal(first.sourceUpdatedAt.conflicts, t - 5000); assert.deepEqual(first.staleFeeds, []);
+    assert.equal("raw" in first, false);
+    t += WORLD_TTL_MS - 1; await get(); assert.equal(calls, 4);
+    t++; revision = 2;
+    const copies = await Promise.all([get(), get(), get()]);
+    assert.equal(calls, 8); assert.ok(copies.every((c) => c.conflicts[0].label === "Z2"));
+    t += WORLD_TTL_MS; fail = "conflicts";
+    const partial = await get();
+    assert.equal(partial.conflicts[0].label, "Z2"); assert.deepEqual(partial.staleFeeds, ["conflicts"]);
+    assert.equal(partial.feedUpdatedAt.conflicts, first.updatedAt + WORLD_TTL_MS);
+    assert.equal(partial.feedUpdatedAt.earthquakes, t);
+    t += WORLD_TTL_MS; fail = "all";
+    const stale = await get(); assert.equal(stale.conflicts[0].label, "Z2");
+    assert.equal(stale.updatedAt, partial.updatedAt); assert.equal(stale.checkedAt, t);
+    assert.equal(stale.staleFeeds.length, 4);
+    await get(); assert.equal(calls, 16, "failed refresh also has a retry cooldown");
+    t += WORLD_TTL_MS; fail = ""; revision = 3;
+    const recovered = await get(); assert.equal(recovered.conflicts[0].label, "Z3"); assert.deepEqual(recovered.staleFeeds, []);
+  } finally { await r.close(); }
+});
+
+test("an initial Osiris outage backs off rather than flooding its four feeds", async () => {
+  let calls = 0, t = 1000;
+  const r = await start({ now: () => t, fetchJson: async () => { calls++; throw new Error("down"); } });
+  try {
+    for (let i = 0; i < 3; i++) assert.equal((await fetch(r.base + "/world")).status, 502);
+    assert.equal(calls, 4);
+    t += WORLD_TTL_MS; await fetch(r.base + "/world"); assert.equal(calls, 8);
   } finally { await r.close(); }
 });
 

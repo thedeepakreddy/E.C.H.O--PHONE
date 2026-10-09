@@ -102,11 +102,11 @@ export const BROWSE_RATE = 900;
  * zones, earthquakes (USGS, each with its tsunami flag), wildfires (NASA FIRMS)
  * and severe weather (NASA EONET). Fetched here, not by the phone — the page may
  * only talk to this server — and cached, so any number of phones cost Osiris one
- * request per feed every few minutes. These are Osiris's own feeds, not a
+ * request per feed every 30 seconds. These are Osiris's own feeds, not a
  * published API, so every field is read defensively and a failed feed keeps
  * the last good copy rather than emptying the page.
  */
-export const WORLD_TTL_MS = 5 * 60_000;
+export const WORLD_TTL_MS = 30_000;
 const OSIRIS = "https://osirisai.live/api";
 
 export function summariseWorld({ conflicts, earthquakes, fires, weather }, now = Date.now()) {
@@ -311,26 +311,39 @@ export function createRelay({
   /** Requests Echo has collected and not yet answered, by id. */
   const inFlight = new Map();
   const logins = new Map();
-  let world = null, worldAt = 0, worldLoading = null;
+  let world = null, worldCheckedAt = null, worldLoading = null;
   const weatherCache = new Map();
   const weatherLoading = new Map();
   let weatherRetryAt = 0, weatherBackupRetryAt = 0;
 
   async function getWorld() {
-    if (world && now() - worldAt < WORLD_TTL_MS) return world;
+    if (worldCheckedAt !== null && now() - worldCheckedAt < WORLD_TTL_MS) {
+      if (world) return world;
+      throw new Error("Osiris is unreachable right now.");
+    }
     worldLoading ??= (async () => {
       const names = ["conflicts", "earthquakes", "fires", "weather"];
       const results = await Promise.all(names.map((n) => fetchJson(`${OSIRIS}/${n}`).catch(() => null)));
       const fresh = Object.fromEntries(names.map((n, i) => [n, results[i]]));
+      worldCheckedAt = now();
+      const staleFeeds = names.filter((n) => fresh[n] === null);
       if (results.every((r) => r === null)) {
-        if (world) return world; // Osiris unreachable: keep showing the last good copy
+        if (world) {
+          world = { ...world, checkedAt: worldCheckedAt, staleFeeds };
+          return world; // preserve the last good values and their original timestamps
+        }
         throw new Error("Osiris is unreachable right now.");
       }
       // A feed that failed keeps its previous values instead of reading as "none".
       const prev = world?.raw ?? {};
       const raw = Object.fromEntries(names.map((n) => [n, fresh[n] ?? prev[n] ?? null]));
-      world = { ...summariseWorld(raw, now()), raw };
-      worldAt = now();
+      const feedUpdatedAt = Object.fromEntries(names.map((n) => [n, fresh[n] !== null ? worldCheckedAt : world?.feedUpdatedAt?.[n] ?? null]));
+      const sourceUpdatedAt = Object.fromEntries(names.map((n) => {
+        const timestamp = raw[n]?.timestamp;
+        const parsed = typeof timestamp === "string" ? Date.parse(timestamp) : timestamp;
+        return [n, Number.isFinite(parsed) ? parsed : null];
+      }));
+      world = { ...summariseWorld(raw, now()), checkedAt: worldCheckedAt, staleFeeds, feedUpdatedAt, sourceUpdatedAt, raw };
       return world;
     })().finally(() => { worldLoading = null; });
     return worldLoading;

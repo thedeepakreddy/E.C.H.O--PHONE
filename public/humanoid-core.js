@@ -340,7 +340,8 @@
     /* Out in under a second; back together at the pace of the opening. */
     var exRate = shared.exTarget > shared.ex ? dt / 900 : dt / 2100;
     shared.ex = shared.exTarget > shared.ex ? Math.min(shared.exTarget, shared.ex + exRate) : Math.max(shared.exTarget, shared.ex - exRate);
-    var wsRate = dt / 320;
+    // Let each word form before the next spoken word updates its particles.
+    var wsRate = dt / 140;
     shared.ws = shared.wsTarget > shared.ws ? Math.min(shared.wsTarget, shared.ws + wsRate) : Math.max(shared.wsTarget, shared.ws - wsRate);
     if (shared.ws === 0 && shared.wsTarget === 0) { shared.words = null; shared.wordsN = 0; }
 
