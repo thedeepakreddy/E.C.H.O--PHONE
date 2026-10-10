@@ -17,6 +17,7 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=7">
 <meta name="app-version" content="__APP_VERSION__">
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/bots.css">
 </head>
 <body data-view="signin">
 <div aria-hidden="true" class="ambient">
@@ -197,6 +198,19 @@
   </div>
 </section>
 
+<!-- ============ BOTS ============ -->
+<section id="v-bots" class="view list-view" aria-label="Bots" hidden>
+  <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Bots</h1><button class="glass pill" id="bots-refresh">Refresh</button></header>
+  <div class="scroll">
+    <section class="glass bcard"><h2>Your bots</h2><p class="sub small">Give a bot a task and come back to its result. Phone bots work on their own. Mac bots use your connected Mac’s tools.</p>
+      <p id="bots-storage" class="sub tiny"></p>
+      <form id="bots-run"><label class="sub small" for="bots-target">Run on</label><select class="glass field" id="bots-target"><option value="phone">This phone</option><option value="mac">Your Mac</option></select><label class="sub small" for="bots-member">Bot</label><select class="glass field" id="bots-member" required></select><p id="bots-role" class="sub small"></p><div class="btns2" id="bots-edit-buttons" hidden><button class="glass small-pill" id="bots-edit" type="button">Edit role</button><button class="glass small-pill" id="bots-remove" type="button">Remove bot</button></div><label class="sub small" for="bots-goal">What should it do?</label><textarea class="glass field" id="bots-goal" required maxlength="4000" rows="3" placeholder="Research three options and prepare a useful comparison"></textarea><p id="bots-followup" class="sub small" hidden></p><div class="btns2"><button type="submit" class="glass big-btn">Start task</button><button id="bots-fresh" type="button" class="glass big-btn" hidden>New task</button></div></form>
+      <p id="bots-status" class="sub small" role="status"></p><button id="bots-add-open" type="button" class="glass small-pill">Create a phone bot</button>
+      <form id="bots-create" hidden><label class="sub small" for="bots-name">Name</label><input class="glass field" id="bots-name" required maxlength="40"><label class="sub small" for="bots-brief">Standing role</label><textarea class="glass field" id="bots-brief" required maxlength="2000" rows="3" placeholder="What should this bot do well?"></textarea><label class="sub small" for="bots-capability">Tools</label><select class="glass field" id="bots-capability"><option value="research">Research &amp; read</option><option value="write">Write &amp; read</option><option value="plan">Plan &amp; read</option><option value="assist">Daily work &amp; prepared actions</option></select><div class="btns2"><button class="glass big-btn" type="submit">Save bot</button><button class="glass big-btn" type="button" id="bots-create-cancel">Cancel</button></div></form>
+    </section><div id="bots-jobs"></div>
+  </div>
+</section>
+
 <!-- ============ WORLD ============ -->
 <section id="v-world" class="view list-view world" aria-label="World" hidden>
   <img class="world-bg" src="/img/osiris.jpg" alt="" aria-hidden="true">
@@ -373,6 +387,7 @@
   <div class="scroll">
     <div class="glass list more-list">
       <button class="row" data-open="browser"><span class="grow"><b>Echo’s Browser</b><span class="sub small">Let Echo research and work on the web</span></span><span>↗</span></button>
+      <button class="row" data-open="bots"><span class="grow"><b>Bots</b><span class="sub small">Give your bots tasks · follow their results</span></span><span>›</span></button>
       <button class="row" data-open="missions"><span class="grow"><b>Mac missions</b><span class="sub small">Follow work on your connected Mac</span></span><span>›</span></button>
       <button class="row" data-open="world"><span class="grow"><b>World</b><span class="sub small">What’s happening beyond your day</span></span><span>›</span></button>
       <button class="row" id="more-snap"><span class="grow"><b>Help me handle this</b><span class="sub small">Bring a letter, bill or screenshot to Echo</span></span><span>＋</span></button>
@@ -535,6 +550,7 @@
 <script src="/experience.js" defer></script>
 <script src="/voice-session.js" defer></script>
 <script src="/speech-particles.js" defer></script>
+<script src="/bots.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>

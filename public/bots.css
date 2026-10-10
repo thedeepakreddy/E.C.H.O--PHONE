@@ -1,0 +1,8 @@
+/* Only the new Bots page. Existing Echo screens and theme stay unchanged. */
+#v-bots label {display:block;margin:12px 0 6px;}
+#v-bots input,#v-bots textarea,#v-bots select {width:100%;box-sizing:border-box;padding:12px 16px;color:var(--text);font:inherit;}
+#v-bots select {background-color:#163142;}
+#v-bots textarea {resize:vertical;min-height:90px;}
+#v-bots .bot-copy {white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;}
+#v-bots a {display:block;margin:10px 0;overflow-wrap:anywhere;}
+#v-bots .bcard .big-btn {margin-top:10px;}

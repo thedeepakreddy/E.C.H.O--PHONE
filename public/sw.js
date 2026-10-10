@@ -3,8 +3,8 @@
  * its shell with no signal. Only these files: nothing from Echo (status, chat,
  * the screen) is ever cached — it is fetched live or not at all.
  */
-const CACHE = "echo-shell-v32";
-const SHELL = ["/", "/app.css", "/app.js", "/experience.js", "/voice-session.js", "/speech-particles.js", "/humanoid-core.js", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/apple-touch-icon.png", "/img/reactor.png", "/img/reactor-core.png", "/img/reactor-mid.png", "/img/reactor-outer.png", "/img/osiris.jpg"];
+const CACHE = "echo-shell-v33";
+const SHELL = ["/", "/app.css", "/app.js", "/bots.js", "/bots.css", "/experience.js", "/voice-session.js", "/speech-particles.js", "/humanoid-core.js", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/apple-touch-icon.png", "/img/reactor.png", "/img/reactor-core.png", "/img/reactor-mid.png", "/img/reactor-outer.png", "/img/osiris.jpg"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

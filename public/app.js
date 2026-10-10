@@ -123,6 +123,7 @@
 
   // ---------- views ----------
   const TABS = ["home", "today", "chat", "memory", "more"];
+  let botsUI = null;
   let experience = null, currentThread = store.get(`echo_thread_${DEV}`) || null;
   let voiceSession = null, homeRec = null, macRecordingGeneration = 0;
   const INSTALLATION = store.get("echo_installation") || crypto.randomUUID();
@@ -152,6 +153,7 @@
     if (view === "missions") { setSeg(seg); renderMissions(); renderHandoffs(); loadHandoffs(); }
     if (view === "brain" && last) renderBrain(last);
     if (view === "memory") { renderMemory(); loadMemory(); }
+    botsUI?.sync();
     experience?.onView(view);
   }
   document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => b.dataset.tab === "memory" ? openMemory() : show(b.dataset.tab)));
@@ -1409,6 +1411,7 @@
     const stale = !macOnline;
     const box = $("seg-missions"), ag = $("seg-agents"), pj = $("seg-projects");
     clear(box); clear(ag); clear(pj);
+    const botsButton=el("button","glass big-btn","Open Bots");botsButton.dataset.open="bots";ag.appendChild(botsButton);
     for (const target of [box, ag, pj]) { const n = macNote(); if (n) target.appendChild(n); }
     if (!d || !(T && S)) { segCounts({}); return; }
     const missions = Array.isArray(d.missions) ? d.missions : [];
@@ -3403,4 +3406,5 @@
   else if (PASS) { mode = "phone"; store.set("echo_mode", "phone"); enter(); loadWeather(); }
   else showWelcome();
   refreshCloud().then(() => { if (params.get("view") && currentView !== "signin") openFromUrl(location.href); });
+  botsUI = window.initEchoBots({ $, el, clear, cloudApi, api, cloudContext, runAction, prepareActions, toast, view:()=>currentView, macReady:()=>!!(T && S && macOnline), macData:()=>last?.bots });
 })();

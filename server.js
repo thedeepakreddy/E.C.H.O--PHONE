@@ -1,3 +1,4 @@
+import {createBots,botState} from './lib/bots.js';
 import {createMacUpdates} from './lib/mac-updates.js';
 /**
  * Echo Remote — the relay.
@@ -70,7 +71,7 @@ const PUBLIC = join(fileURLToPath(new URL(".", import.meta.url)), "public");
 /** The app's version: a hash of its files, so an open app can tell it's out of date and reload. */
 export const APP_VERSION = (() => {
   const h = createHash("sha256");
-  for (const f of ["index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
+  for (const f of ["index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "bots.js", "bots.css", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
   return h.digest("hex").slice(0, 12);
 })();
 const TYPES = {
@@ -236,11 +237,23 @@ export function createRelay({
     embed: gemini?.embed ? (text, opts) => gemini.embed(text, opts) : null,
     onDates: (device, items, tz) => withPhones((phones) => { syncDates(deviceOf(phones, device), items, tz, now()); }),
   });
+  const bots=createBots({now,access:device=>accountAccess(device,null),
+    withState:async(device,fn,options)=>{const owner=randomUUID(),key=`bots:${device}`,lock=`lease:${key}`;let acquired=false;
+      for(let i=0;i<40;i++){if(await store.acquireLease(lock,owner)){acquired=true;break;}await new Promise(r=>setTimeout(r,50));}
+      if(!acquired)throw new CloudError('busy','Your bots are being updated. Retry shortly.');
+      try{return await withKey(key,botState,fn,options);}finally{await store.releaseLease(lock,owner);}
+    },
+    execute:async({bot,goal,history,context,signal,ensure,onEvent})=>{
+      if(!cloud)throw new CloudError('setup','Bots need Phone mode’s configured brain.');
+      const mem=await memoryFor(context.device,context.tz);const result=await cloud.chat({text:goal,history,context,memory:mem,bot:{...bot,runId:context.requestId},signal,ensure,onEvent});withLinks(result.actions);return result;
+    },
+  });
   /** Memory as Echo's phone brain uses it: this phone's, found or saved by the tools in lib/cloud.js. */
-  async function memoryFor(device, tz) {
+  async function memoryFor(device, tz, turnId=randomUUID()) {
     const dev = await withPhones((phones) => deviceOf(phones, device), { save: false });
     const zone = validTz(tz) ? tz : dev.prefs?.tz;
     return {
+      runBot:async raw=>{const roster=await bots.list(device),bot=roster.bots.find(b=>b.id===raw.bot_id);if(!bot)throw Object.assign(new Error("Choose an existing bot."),{input:true});const hash=createHash("sha256").update(JSON.stringify([device,turnId,bot.id,String(raw.goal).trim()])).digest("hex").slice(0,32),requestId=`${hash.slice(0,8)}-${hash.slice(8,12)}-${hash.slice(12,16)}-${hash.slice(16,20)}-${hash.slice(20)}`;return await bots.run(device,{requestId,botId:bot.id,revision:bot.revision,goal:raw.goal},{device,tz:zone,requestId,macOnline:false});},
       upcoming: comingUp(dev, now(), zone, 30),
       search: async (q) => {
         const [saved, chats, tasks] = await Promise.all([
@@ -711,6 +724,9 @@ export function createRelay({
       });
     }
     const device = claims.device;
+    if(req.method === "GET" && path === "/cloud/bots") {
+      try { return send(res,200,{...await bots.list(device),durable:store.remote}); } catch(e) { return sendCloudError(res,e); }
+    }
     const installation = /^[a-zA-Z0-9_-]{8,80}$/.test(req.headers["x-echo-installation"]) ? req.headers["x-echo-installation"] : null;
     const subForInstallation = (dev) => installation && dev.subscriptions ? dev.subscriptions[installation]?.sub ?? null : dev.sub;
     const query = new URL(req.url, "http://x").searchParams;
@@ -1087,15 +1103,31 @@ export function createRelay({
         return send(res, 200, result);
       } catch (e) { return sendCloudError(res, e); }
     }
+    if(path==='/cloud/bots'){
+      if(req.method==='GET')return send(res,200,await bots.list(claims.device));
+      if(req.method!=='POST')return send(res,405,{message:'Method not allowed.'});
+      if(rateLimited(claims.device))return send(res,429,{message:'Too many bot requests. Try again shortly.'});
+      try{const b=await readJson(req,CLOUD_BODY),device=claims.device;
+        if(b.action==='save')return send(res,200,{bot:await bots.save(device,b)});
+        if(b.action==='remove')return send(res,200,await bots.remove(device,b));
+        if(b.action==='stop')return send(res,200,await bots.stop(device,b.id));
+        if(b.action==='run'){
+          if(!cloud)throw new CloudError('setup','Bots need Phone mode’s brain configuration.');
+          const context={...(b.context&&typeof b.context==='object'?b.context:{}),device,requestId:b.requestId,macOnline};
+          return send(res,202,await bots.run(device,b,context));
+        }
+        return send(res,400,{message:'Choose a supported bot action.'});
+      }catch(e){return sendCloudError(res,e);}
+    }
     if (path === "/cloud/chat" || path === "/cloud/voice") {
       if (!cloud) return send(res, 503, { error: "setup", message: "Phone mode isn't set up yet: add GEMINI_API_KEY on Render." });
       if (rateLimited(claims.device)) return send(res, 429, { error: "busy", message: "Slow down a little — too many messages this minute." });
       try {
         const body = await readJson(req, path === "/cloud/voice" ? CLOUD_VOICE_BODY : CLOUD_BODY);
         const context = { ...(body.context && typeof body.context === "object" ? body.context : {}), macOnline };
-        const mem = await memoryFor(device, context.tz).catch(() => null);
         if (path === "/cloud/voice" && !/^[A-Za-z0-9+/=]{100,}$/.test(String(body.audio ?? ""))) return send(res, 400, { error: "input", message: "That recording didn't come through." });
         const requestId = /^[a-zA-Z0-9_-]{8,80}$/.test(body.requestId) ? body.requestId : randomUUID();
+        const mem = await memoryFor(device, context.tz,requestId).catch(() => null);
         const threadId = body.threadId ? String(body.threadId).slice(0, 80) : null;
         // A separate turn lock permits memory and folder tools to change their own store keys.
         const result = await withKey(`turn:${device}:${threadId ?? "legacy"}`, () => ({}), async () => {

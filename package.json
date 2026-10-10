@@ -5,9 +5,12 @@
   "private": true,
   "type": "module",
   "main": "server.js",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "test:ui:bots": "node scripts/bots-ui-test.mjs"
   }
 }
