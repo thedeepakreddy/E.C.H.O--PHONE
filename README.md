@@ -2,6 +2,40 @@
 
 Echo's standalone phone assistant, with an optional relay connection to Echo on your Mac over Wi-Fi or mobile data.
 
+## Screenshots
+
+Current shipping pages captured on October 10, 2026 at a 390 × 844 phone viewport. These previews use disposable sample data, including the World observations and admin account; no private chats, passwords, recovery keys or desktop contents appear here. The Mac screen viewer shows its unpaired initial state. Click any screenshot to open it at full size.
+
+| Page | Page | Page |
+| --- | --- | --- |
+| **Echo**<br><a href="docs/screenshots/echo.png"><img src="docs/screenshots/echo.png" width="240" alt="Echo Echo screenshot"></a> | **Today**<br><a href="docs/screenshots/today.png"><img src="docs/screenshots/today.png" width="240" alt="Echo Today screenshot"></a> | **Chat**<br><a href="docs/screenshots/chat.png"><img src="docs/screenshots/chat.png" width="240" alt="Echo Chat screenshot"></a> |
+| **Bots**<br><a href="docs/screenshots/bots.png"><img src="docs/screenshots/bots.png" width="240" alt="Echo Bots screenshot"></a> | **Echo Browser**<br><a href="docs/screenshots/browser.png"><img src="docs/screenshots/browser.png" width="240" alt="Echo Echo Browser screenshot"></a> | **World Intelligence**<br><a href="docs/screenshots/world.png"><img src="docs/screenshots/world.png" width="240" alt="Echo World Intelligence screenshot"></a> |
+
+<details>
+<summary>All other Phone pages</summary>
+
+| Page | Page | Page |
+| --- | --- | --- |
+| **Welcome**<br><a href="docs/screenshots/welcome.png"><img src="docs/screenshots/welcome.png" width="240" alt="Echo Welcome screenshot"></a> | **Conversations & folders**<br><a href="docs/screenshots/conversations.png"><img src="docs/screenshots/conversations.png" width="240" alt="Echo Conversations & folders screenshot"></a> | **Capture & recurring reminders**<br><a href="docs/screenshots/commitment.png"><img src="docs/screenshots/commitment.png" width="240" alt="Echo Capture & recurring reminders screenshot"></a> |
+| **Saved**<br><a href="docs/screenshots/memory.png"><img src="docs/screenshots/memory.png" width="240" alt="Echo Saved screenshot"></a> | **Snap**<br><a href="docs/screenshots/snap.png"><img src="docs/screenshots/snap.png" width="240" alt="Echo Snap screenshot"></a> | **Briefing**<br><a href="docs/screenshots/briefing.png"><img src="docs/screenshots/briefing.png" width="240" alt="Echo Briefing screenshot"></a> |
+| **More**<br><a href="docs/screenshots/more.png"><img src="docs/screenshots/more.png" width="240" alt="Echo More screenshot"></a> | **Recovery & sync**<br><a href="docs/screenshots/account.png"><img src="docs/screenshots/account.png" width="240" alt="Echo Recovery & sync screenshot"></a> | **Settings**<br><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" width="240" alt="Echo Settings screenshot"></a> |
+| **Optional Mac connection**<br><a href="docs/screenshots/mac.png"><img src="docs/screenshots/mac.png" width="240" alt="Echo Optional Mac connection screenshot"></a> | **Mac missions**<br><a href="docs/screenshots/missions.png"><img src="docs/screenshots/missions.png" width="240" alt="Echo Mac missions screenshot"></a> | **Brain**<br><a href="docs/screenshots/brain.png"><img src="docs/screenshots/brain.png" width="240" alt="Echo Brain screenshot"></a> |
+| **Mac screen viewer**<br><a href="docs/screenshots/screen.png"><img src="docs/screenshots/screen.png" width="240" alt="Echo Mac screen viewer screenshot"></a> |  |  |
+
+</details>
+
+<details>
+<summary>All admin pages</summary>
+
+| Page | Page | Page |
+| --- | --- | --- |
+| **Admin sign-in**<br><a href="docs/screenshots/admin-login.png"><img src="docs/screenshots/admin-login.png" width="240" alt="Echo Admin sign-in screenshot"></a> | **Admin overview**<br><a href="docs/screenshots/admin-overview.png"><img src="docs/screenshots/admin-overview.png" width="240" alt="Echo Admin overview screenshot"></a> | **Admin users**<br><a href="docs/screenshots/admin-users.png"><img src="docs/screenshots/admin-users.png" width="240" alt="Echo Admin users screenshot"></a> |
+| **Admin problems**<br><a href="docs/screenshots/admin-problems.png"><img src="docs/screenshots/admin-problems.png" width="240" alt="Echo Admin problems screenshot"></a> | **Admin activity**<br><a href="docs/screenshots/admin-activity.png"><img src="docs/screenshots/admin-activity.png" width="240" alt="Echo Admin activity screenshot"></a> |  |
+
+</details>
+
+Regenerate these isolated previews with `ECHO_BROWSER_DEPENDENCIES=/path/to/node_modules node scripts/readme-screenshots.mjs` (the directory must contain Playwright and its Chromium browser must be installed). The capture script starts only a disposable local relay.
+
 ## Owner admin
 
 Open `/admin`, or **More → Admin**, for diagnostics and Phone account management. Set `ECHO_ADMIN_PASSWORD` on Render to a unique private password of at least 24 characters. Admin has its own HttpOnly, SameSite session cookie and CSRF-protected actions; normal Phone and Mac credentials never grant admin access. Sessions expire after six hours and on restart. Never commit the password; `.admin-password` is ignored for a private local owner copy.

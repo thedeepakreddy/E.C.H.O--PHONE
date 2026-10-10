@@ -1,0 +1,149 @@
+{
+  "source": "Shipping pages with disposable local sample data; no real account or desktop captured.",
+  "captures": [
+    {
+      "id": "welcome",
+      "title": "Welcome",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "echo",
+      "title": "Echo",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "today",
+      "title": "Today",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "commitment",
+      "title": "Capture and recurring reminders",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "chat",
+      "title": "Chat",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "conversations",
+      "title": "Conversations and folders",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "bots",
+      "title": "Bots",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "browser",
+      "title": "Echo Browser",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "world",
+      "title": "World Intelligence",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "memory",
+      "title": "Saved",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "more",
+      "title": "More",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "account",
+      "title": "Recovery and sync",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "settings",
+      "title": "Settings",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "mac",
+      "title": "Optional Mac connection",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "missions",
+      "title": "Mac missions",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "snap",
+      "title": "Snap",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "briefing",
+      "title": "Briefing",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "brain",
+      "title": "Brain",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "screen",
+      "title": "Mac screen viewer (unpaired preview)",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "admin-login",
+      "title": "Admin sign-in",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "admin-overview",
+      "title": "Admin overview",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "admin-users",
+      "title": "Admin users",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "admin-problems",
+      "title": "Admin problems",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "admin-activity",
+      "title": "Admin activity",
+      "width": 390,
+      "height": 844
+    }
+  ]
+}
