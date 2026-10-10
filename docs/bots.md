@@ -9,3 +9,5 @@ The existing model/quota configuration is used. Configure the existing Upstash s
 Bots use Echo’s existing model, guarded tools and Browser. Paired Mac tasks use its native guarded runner. Separate browser computers or isolated containers are not provisioned.
 
 Validation: npm test (132 tests); scripts/bots-ui-test.mjs runs Chromium/WebKit with Playwright available through normal module resolution or ECHO_BROWSER_DEPENDENCIES. ECHO_WEBKIT_EXECUTABLE may select an already installed WebKit binary. Synthetic models and temporary local servers are used; no microphone or real user tasks are invoked by these tests.
+
+Your Mac also offers Team of specialists: reading-only reports followed by Lead’s combined answer. Mac Agents manages the shared roster and inspects the same tasks; Bots starts and follows work. Phone follow-ups preserve the Mac team’s original participants. Repeated report/artifact text is shown once.
