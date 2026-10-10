@@ -122,7 +122,7 @@
   const pub = (p) => fetch(p).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))));
 
   // ---------- views ----------
-  const TABS = ["home", "today", "chat", "memory", "more"];
+  const TABS = ["home", "today", "chat", "bots", "browser"];
   let botsUI = null;
   let experience = null, currentThread = store.get(`echo_thread_${DEV}`) || null;
   let voiceSession = null, homeRec = null, macRecordingGeneration = 0;
@@ -131,10 +131,10 @@
   let currentView = "signin", lastTab = store.get("echo_tab") || "home";
   /** Where each pushed page's Back goes: the page it was opened from. */
   const backTo = {};
-  function show(view, { back = false } = {}) {
+  function show(view, { back = false, push = false } = {}) {
     if (voiceSession?.active && !["home", "chat"].includes(view)) stopVoice();
     if (view === "screen" && !(S && macOnline)) { toast("That needs your Mac, and it's offline right now.", true); return; }
-    if (!back && !TABS.includes(view) && view !== currentView && currentView !== "signin") backTo[view] = currentView;
+    if (!back && (push || !TABS.includes(view)) && view !== currentView && currentView !== "signin") backTo[view] = currentView;
     currentView = view;
     body.dataset.view = view;
     for (const v of document.querySelectorAll(".view")) v.hidden = v.id !== `v-${view}`;
@@ -156,11 +156,12 @@
     botsUI?.sync();
     experience?.onView(view);
   }
-  document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => b.dataset.tab === "memory" ? openMemory() : show(b.dataset.tab)));
+  document.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { delete backTo[b.dataset.tab]; show(b.dataset.tab); }));
+  $("more-saved").addEventListener("click", () => openMemory());
   document.addEventListener("click", (e) => {
     const open = e.target.closest("[data-open]");
-    if (open) show(open.dataset.open);
-    if (e.target.closest("[data-back]")) show(backTo[currentView] && backTo[currentView] !== currentView ? backTo[currentView] : lastTab, { back: true });
+    if (open) show(open.dataset.open, { push: true });
+    if (e.target.closest("[data-back]")) show(backTo[currentView] && backTo[currentView] !== currentView ? backTo[currentView] : lastTab !== currentView ? lastTab : "home", { back: true });
     if (e.target.closest("[data-close]")) closeSheets();
   });
 
@@ -1976,7 +1977,7 @@
   }
   $("mem-back").addEventListener("click", () => {
     if (mem.open) { mem.open = null; renderMemory(); return; }
-    show(mem.from && mem.from !== "memory" ? mem.from : lastTab);
+    show(mem.from && mem.from !== "memory" ? mem.from : lastTab, { back: true });
     if (mem.from === "snap") renderSnap();
   });
   $("mem-new").addEventListener("click", () => openMemNote());

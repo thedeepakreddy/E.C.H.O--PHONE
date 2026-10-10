@@ -242,7 +242,7 @@ window.createEchoExperience = function (api) {
     else generateKey();
   });
   $("account-copy").addEventListener("click", async () => { try { await navigator.clipboard.writeText($("recovery-key").value); api.toast("Recovery key copied. Save it somewhere private."); } catch { $("recovery-key").select(); api.toast("Select and copy the key."); } });
-  $("account-back").addEventListener("click", () => api.show(api.hasSession() ? "more" : "signin"));
+  $("account-back").addEventListener("click", () => api.show(api.hasSession() ? "more" : "signin", { back: true }));
   $("account-recover").addEventListener("submit", async (e) => {
     e.preventDefault(); const b = e.target.querySelector("button"); b.disabled = true; $("account-error").textContent = "";
     try {
