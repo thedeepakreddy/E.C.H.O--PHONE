@@ -456,6 +456,7 @@
     if (document.hidden) return;
     if (S) { started = false; start(); }
     refreshCloud();
+    if(currentView==="missions")void loadMacUpdates();
   });
 
   // ---------- status ----------
@@ -1365,6 +1366,7 @@
     seg = k;
     document.querySelectorAll("[data-seg]").forEach((x) => x.setAttribute("aria-selected", String(x.dataset.seg === k)));
     ["missions", "agents", "projects"].forEach((n) => ($(`seg-${n}`).hidden = n !== k));
+    $("mac-updates-box").hidden = k !== "missions" || passClaims()?.p === true || !passValid();
     $("handoff-box").hidden = k !== "missions"; // jobs for the Mac belong with missions
   }
   document.querySelectorAll("[data-seg]").forEach((b) => b.addEventListener("click", () => setSeg(b.dataset.seg)));
@@ -2998,10 +3000,38 @@
     } catch (e) { toast(cloudProblem(e), true); }
   });
   async function loadHandoffs() {
+    void loadMacUpdates();
     if (!passValid()) return;
     try { handoffItems = (await cloudApi("/cloud/handoff")).items || []; } catch { /* keep the last list */ }
     renderHandoffs();
   }
+  let macUpdatesLoading=false,macUpdatesTimer=0,macUpdatesRequest=0;
+  async function loadMacUpdates() {
+    clearTimeout(macUpdatesTimer);macUpdatesTimer=0;
+    const box=$("mac-updates-box");
+    if(document.hidden||currentView!=="missions"||!passValid()||passClaims()?.p===true){box.hidden=true;return;}
+    box.hidden=seg!=="missions";
+    if(macUpdatesLoading)return;
+    macUpdatesLoading=true;const passAtStart=PASS,request=++macUpdatesRequest;
+    try {
+      const result=await cloudApi("/cloud/mac-updates");
+      if(PASS!==passAtStart||request!==macUpdatesRequest||document.hidden||currentView!=="missions")return;
+      clear(box);const heading=el("div","row ho-head");heading.appendChild(el("b","grow","Updates from your Mac"));
+      const notifications=el("button","glass small-pill","Enable alerts");
+      notifications.addEventListener("click",async()=>{notifications.disabled=true;try{await enableNotifications();toast("Mac update notifications are on.");notifications.textContent="Alerts enabled";}catch(e){toast(e.message,true);}finally{notifications.disabled=false;}});
+      heading.appendChild(notifications);box.appendChild(heading);
+      if(!result.items?.length)box.appendChild(el("p","sub small empty-line",'Tell Echo on your Mac: “send me updates to my phone”. Your Mac must stay awake with Echo running.'));
+      for(const item of (result.items||[]).slice(0,20)){
+        const row=el("div","row ho-row"),copy=el("div","grow");copy.append(el("b","clamp2",item.title),el("p","small",item.body),el("span","sub tiny",ago(item.at)));
+        row.appendChild(copy);
+        if(item.kind==="needs-you"){const open=el("button","glass small-pill","Open Echo");open.addEventListener("click",()=>{show("chat");if(S&&macOnline){setMode("mac");}else toast("Reconnect to your Mac to answer its pending question.",true);});row.appendChild(open);}
+        box.appendChild(row);
+      }
+    }catch{if(!box.children.length)box.appendChild(el("p","sub small empty-line","Couldn’t read Mac updates. Retrying shortly."));}
+    finally{macUpdatesLoading=false;if(!document.hidden&&currentView==="missions"&&passValid()&&passClaims()?.p!==true)macUpdatesTimer=setTimeout(loadMacUpdates,5000);}
+  }
+  document.addEventListener("visibilitychange",()=>{if(document.hidden){clearTimeout(macUpdatesTimer);macUpdatesTimer=0;macUpdatesRequest++;}});
+  window.addEventListener("pagehide",()=>{clearTimeout(macUpdatesTimer);macUpdatesTimer=0;macUpdatesRequest++;});
   const HO_STATE = { waiting: ["Waiting", "#ffb35c"], started: ["Working", "#5ee7f5"], done: ["Done", "#3ee6b0"], failed: ["Failed", "#ff6b6b"], rejected: ["Refused", "#ff6b6b"], cancelled: ["Cancelled", "#8fa3aa"] };
   function renderHandoffs() {
     const box = $("handoff-box");

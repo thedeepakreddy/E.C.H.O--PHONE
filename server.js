@@ -1,3 +1,4 @@
+import {createMacUpdates} from './lib/mac-updates.js';
 /**
  * Echo Remote — the relay.
  *
@@ -423,6 +424,7 @@ export function createRelay({
   // Render puts the caller's address first in X-Forwarded-For.
   const clientIp = (req) => String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "?";
 
+  const macUpdates=createMacUpdates({withPhones,withKey,push,now,generation:()=>passGen});
   const admin = createAdmin({ password: adminPassword, now, withPhones, withKey, store, send, readJson, clientIp, publicUrl,
     snapshot: async () => ({ app: APP_VERSION, node: process.version, commit: /^[a-f0-9]{7,40}$/.test(deployment.commit) ? deployment.commit : null,
       brain: { configured: Boolean(cloud), model: gemini?.model ?? null }, storage: { durable: store.remote, connected: true },
@@ -700,7 +702,7 @@ export function createRelay({
     const macOnline = !claims.phoneOnly && online();
     // Pairing later preserves this phone's saved data and enables the Mac digest.
     if (!claims.phoneOnly && path === "/cloud/status") {
-      await withPhones((phones) => { deviceOf(phones, claims.device).phoneOnly = false; });
+      await withPhones((phones) => { const dev=deviceOf(phones, claims.device); dev.phoneOnly = false; dev.pairedSession={gen:claims.gen,exp:claims.exp}; });
     }
     if (path === "/cloud/status" && req.method === "GET") {
       return send(res, 200, {
@@ -827,6 +829,10 @@ export function createRelay({
         const last = await store.get(`cal:${device}`).catch(() => null);
         return send(res, 200, { url: calendarUrl(key), last: last ? { at: last.at, count: last.events.length } : null });
       }
+      if(path==='/cloud/mac-updates') {
+        if(claims.phoneOnly)return send(res,403,{message:'Connect to your Mac to receive its updates.'});
+        return send(res,200,await macUpdates.list(device));
+      }
       if (path === "/cloud/handoff") {
         const items = await withHandoffs((st) => st.items.filter((i) => i.task.device === device).map(forPhone), { save: false });
         return send(res, 200, { items: items.reverse().slice(0, 20), macOnline });
@@ -852,6 +858,7 @@ export function createRelay({
           if (!validSubscription(sub) && !(pushAnyHost && sub?.endpoint)) return send(res, 400, { error: "input", message: "That notification subscription isn't valid." });
           await withPhones((phones) => {
             const dev = deviceOf(phones, device), id = /^[a-zA-Z0-9_-]{8,80}$/.test(body.installation) ? body.installation : "legacy";
+            if(!claims.phoneOnly)dev.pairedSession={gen:claims.gen,exp:claims.exp};
             dev.subscriptions ??= {};
             if (!dev.subscriptions[id] && Object.keys(dev.subscriptions).length >= 10) throw Object.assign(new Error("Ten phones already receive notifications. Remove an older installation first."), { input: true });
             dev.sub = { endpoint: String(sub.endpoint), keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } };
@@ -1322,8 +1329,15 @@ export function createRelay({
         .then((d) => send(res, 200, { results: (d?.results ?? []).map((r) => ({ name: r.name, country: r.country ?? "", admin: r.admin1 ?? "", lat: r.latitude, lon: r.longitude })) }))
         .catch(() => send(res, 502, { error: "Search is unavailable right now." }));
     }
-    if (path === "/agent/poll" || path === "/agent/reply" || path === "/agent/digest" || path === "/agent/handoff" || path === "/agent/handoff/update") {
+    if (path === "/agent/updates" || path === "/agent/poll" || path === "/agent/reply" || path === "/agent/digest" || path === "/agent/handoff" || path === "/agent/handoff/update") {
       if (!agentAuthorized(req)) return send(res, 404, "Not found");
+      if(path==='/agent/updates') {
+        return void (async()=>{try{await passGenLoaded;
+          if(req.method==='GET')return send(res,200,await macUpdates.inventory());
+          if(req.method==='POST')return send(res,200,await macUpdates.receive(await readJson(req,16384)));
+          return send(res,405,{message:'Method not allowed.'});
+        }catch(error){send(res,error?.input?400:503,{message:error?.input?error.message:'Updates could not be saved. Retry shortly.'});}})();
+      }
       if (path === "/agent/handoff" && req.method === "GET") {
         return void withHandoffs((st) => st.items.filter((i) => i.status === "waiting").map((i) => ({ task: i.task, assertion: i.assertion })), { save: false })
           .then((items) => send(res, 200, { items })).catch(() => send(res, 503, { error: "store" }));
