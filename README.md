@@ -202,3 +202,14 @@ The relay only holds jobs and can't check Face ID itself; the Mac checks it befo
   ```
 
   Then set `relayUrl` to `http://127.0.0.1:10000`. Face ID needs the real https address.
+
+### Readable replies and research pictures
+Phone chat (both modes) and Bots render assistant Markdown with headings, bold text, lists, tables, fenced code and safe source links, using scoped Echo typography. Existing saved replies are formatted on opening; user messages and action controls remain literal. Markdown and picture destinations stay out of speech while captions follow spoken words.
+
+Public research can use the read-only image_search tool to select relevant Wikimedia Commons illustrations with file, author and license credits. Pictures are optional when useful; private notes, simple reminders, unrelated results and unavailable searches do not get invented illustrations. The renderer allows only public HTTPS Commons image paths and leaves readable text if an image is unavailable. Browser parser/sanitizer bundles are self-hosted and included in the offline shell with their licenses.
+
+Checks: 142 automated Phone tests, including actual cloud chat/bot image tool turns with fixtures, plus Chromium/WebKit chat, Bots, restored history, semantic Markdown, unsafe HTML/URL rejection, image failure and 320–430 px layouts.
+
+Live research: search_research queries arXiv preprints and Crossref publisher metadata directly, with a recent-date filter, paper/author/abstract links, retrieval timestamps and separate source failure reporting. read_web_page gives Phone chat/Bots automatic public text and link access through Echo Browser's guarded network fetch; Mac Bots use their existing isolated read_browser_page and native tools under current grants. Prompts require current evidence, source dates, citations and honest access gaps. These tools read public material without sign-in cookies, paywall bypass or new paid infrastructure. Native Mac's browser can render JavaScript pages; Phone's reader returns server HTML/text.
+
+Additional verification: real arXiv and Crossref calls both returned current papers; the Phone reader fetched a real arXiv abstract page. Shared research/index/date/XML/size/cancel tests and Phone public-page/source/tool-flow/redirect/private-address tests passed. Full Phone suite: 142/142.

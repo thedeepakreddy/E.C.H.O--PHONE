@@ -6,11 +6,16 @@
   "type": "module",
   "main": "server.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.18.1"
   },
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/",
-    "test:ui:bots": "node scripts/bots-ui-test.mjs"
+    "test:ui:bots": "node scripts/bots-ui-test.mjs",
+    "test:ui:markdown": "node scripts/markdown-ui-test.mjs"
+  },
+  "dependencies": {
+    "cheerio": "1.2.0",
+    "fast-xml-parser": "5.11.2"
   }
 }

@@ -1,4 +1,4 @@
-/* Bots live inside Echo's current shell. All task/model content is rendered as text. */
+/* Bots live inside Echo's current shell. Answers use the shared safe Markdown renderer. */
 window.initEchoBots=({$,el,clear,cloudApi,api,cloudContext,runAction,prepareActions,toast,view,macReady})=>{
  let data=null,loading=null,timer=null,version=0,parentId=null,pending=null,editing=null,closed=false,loadError=false;
  const visible=()=>!closed&&!document.hidden&&view()==='bots';
@@ -12,7 +12,7 @@ window.initEchoBots=({$,el,clear,cloudApi,api,cloudContext,runAction,prepareActi
   if(select.dataset.signature!==signature){clear(select);for(const b of d.bots){const o=el('option','',b.name);o.value=b.id;select.append(o);}if(d.bots.some(b=>b.id===chosen))select.value=chosen;else if(d.bots.some(b=>b.id==='research'))select.value='research';select.dataset.signature=signature;role();}
   $('bots-add-open').hidden=target()!=='phone';const box=$('bots-jobs');clear(box);
   if(!d.jobs.length)box.append(el('p','sub small','No bot runs yet. Give a bot a clear result to deliver.'));
-  for(const j of d.jobs){const card=el('section','glass bcard'),name=el('h2','',j.botName||'Bot'),shown=new Set();const copy=text=>{if(!text||shown.has(text))return;shown.add(text);card.append(el('p','bot-copy',text));};card.append(name,el('p','',j.goal),el('p','sub small',`${j.status.replace(/-/g,' ')} · ${new Date(j.updatedAt).toLocaleString()}`));
+  for(const j of d.jobs){const card=el('section','glass bcard'),name=el('h2','',j.botName||'Bot'),shown=new Set();const copy=text=>{if(!text||shown.has(text))return;shown.add(text);const body=window.EchoMarkdown.render(text);body.classList.add('bot-copy');card.append(body);};card.append(name,el('p','',j.goal),el('p','sub small',`${j.status.replace(/-/g,' ')} · ${new Date(j.updatedAt).toLocaleString()}`));
    const result=j.result;for(const event of j.events||[])if(event.tool)card.append(el('p','sub tiny',`${event.type==='TOOL_CALL_RESULT'?'Read / returned':'Using'} · ${event.tool.replace(/_/g,' ')}`));
    for(const step of j.steps||[]){card.append(el('p','sub small',`${step.name||step.id||'Specialist'} · ${step.status}`));if(step.result?.summary&&step.result.summary!==j.result?.summary)copy(step.result.summary);}
    const text=result?.reply||result?.summary||j.draft;copy(text);if(j.error)card.append(el('p','sub small',j.error));if(result?.question)card.append(el('p','bot-copy',`Needs you: ${result.question}`));

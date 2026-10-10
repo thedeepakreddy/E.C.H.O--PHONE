@@ -1,0 +1,24 @@
+/* Scoped answer typography; Echo's shell, controls and theme keep their existing styles. */
+.echo-markdown { white-space:normal; overflow-wrap:anywhere; line-height:1.6; min-width:0; font-size:inherit; text-align:left; }
+.echo-markdown > :first-child { margin-top:0; }
+.echo-markdown > :last-child { margin-bottom:0; }
+.echo-markdown p { margin:.55em 0; font-size:inherit; line-height:inherit; white-space:normal; }
+.echo-markdown h1,.echo-markdown h2,.echo-markdown h3,.echo-markdown h4,.echo-markdown h5,.echo-markdown h6 { color:inherit; font-family:inherit; font-weight:700; line-height:1.3; letter-spacing:normal; text-transform:none; margin:1em 0 .45em; }
+.echo-markdown h1 { font-size:1.6em; }.echo-markdown h2 { font-size:1.35em; }.echo-markdown h3 { font-size:1.15em; }.echo-markdown h4,.echo-markdown h5,.echo-markdown h6 { font-size:1em; }
+.echo-markdown strong { color:inherit; font-weight:700; }
+.echo-markdown ul,.echo-markdown ol { padding-left:1.45em; margin:.55em 0; list-style-position:outside; }
+.echo-markdown ul { list-style-type:disc; }.echo-markdown ol { list-style-type:decimal; }.echo-markdown li { display:list-item; margin:.25em 0; }
+.echo-markdown li > p { margin:.2em 0; }
+.echo-markdown a { color:inherit; text-decoration:underline; text-underline-offset:3px; }
+.echo-markdown blockquote { margin:.75em 0; padding:.15em .9em; border-left:3px solid currentColor; opacity:.85; }
+.echo-markdown pre { max-width:100%; overflow-x:auto; padding:.85em; background:rgba(127,150,166,.12); border-radius:10px; white-space:pre; text-align:left; }
+.echo-markdown code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.88em; background:rgba(127,150,166,.12); padding:.1em .25em; border-radius:4px; }
+.echo-markdown pre code { padding:0; background:none; white-space:pre; }
+.echo-markdown table { display:block; max-width:100%; overflow-x:auto; border-collapse:collapse; margin:.75em 0; }
+.echo-markdown th,.echo-markdown td { padding:.5em .65em; border:1px solid rgba(127,150,166,.3); text-align:left; min-width:5em; }
+.echo-markdown th { font-weight:700; background:rgba(127,150,166,.12); }
+.echo-markdown img { display:block; width:auto; max-width:100%; max-height:320px; object-fit:contain; border-radius:12px; margin:.8em 0 .35em; }
+.echo-markdown hr { border:0; border-top:1px solid rgba(127,150,166,.3); margin:1em 0; }
+.echo-image-unavailable { display:block; font-size:.85em; opacity:.7; }
+
+#v-bots .echo-markdown,.echo-markdown.companion-copy { white-space:normal; }

@@ -909,7 +909,7 @@
     stopSpeaking();
     const voices = speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang));
     const voice = voices.find((v) => /Daniel|Arthur|Samantha|Karen/.test(v.name)) || voices.find((v) => v.localService) || voices[0] || null;
-    return speechPlayer.play(text, voice);
+    return speechPlayer.play(window.EchoMarkdown.speechText(text), voice);
   }
 
   // ---------- Echo speaking on the phone: the figure bursts, the words show ----------
@@ -969,7 +969,8 @@
     }
     const mine = m.from === "you";
     const n = el("div", `msg ${mine ? "me cta" : "echo glass"}${m.kind === "voice" ? " voice" : ""}`);
-    n.appendChild(document.createTextNode(m.text));
+    if(mine)n.appendChild(document.createTextNode(m.text));
+    else {const content=window.EchoMarkdown.render(m.text);content.addEventListener('load',()=>{if(stickToBottom)scrollMessages();},true);n.appendChild(content);}
     if (!mine && m.actions && m.actions.length) {
       const acts = el("div", "acts");
       for (const a of m.actions) {

@@ -71,7 +71,7 @@ const PUBLIC = join(fileURLToPath(new URL(".", import.meta.url)), "public");
 /** The app's version: a hash of its files, so an open app can tell it's out of date and reload. */
 export const APP_VERSION = (() => {
   const h = createHash("sha256");
-  for (const f of ["index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "bots.js", "bots.css", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
+  for (const f of ["markdown.js", "markdown.css", "vendor/markdown-it.min.js", "vendor/purify.min.js", "index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "bots.js", "bots.css", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
   return h.digest("hex").slice(0, 12);
 })();
 const TYPES = {
@@ -85,7 +85,7 @@ const SECURITY = {
   "x-content-type-options": "nosniff",
   "strict-transport-security": "max-age=31536000",
   "content-security-policy":
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; manifest-src 'self'; worker-src 'self'",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://upload.wikimedia.org https://thumb.wikimedia.org data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; manifest-src 'self'; worker-src 'self'",
 };
 /** Phone mode: requests per device per minute, and how big a request may be. */
 export const CLOUD_RATE = 30;
