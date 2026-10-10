@@ -1,4 +1,4 @@
-# Echo Remote
+# Echo Phone
 
 Echo's standalone phone assistant, with an optional relay connection to Echo on your Mac over Wi-Fi or mobile data.
 
