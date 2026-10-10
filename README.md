@@ -36,9 +36,6 @@ Current shipping pages captured on October 10, 2026 at a 390 × 844 phone viewpo
 
 Regenerate these isolated previews with `ECHO_BROWSER_DEPENDENCIES=/path/to/node_modules node scripts/readme-screenshots.mjs` (the directory must contain Playwright and its Chromium browser must be installed). The capture script starts only a disposable local relay.
 
-## Owner admin
-
-Open `/admin`, or **More → Admin**, for diagnostics and Phone account management. Set `ECHO_ADMIN_PASSWORD` on Render to a unique private password of at least 24 characters. Admin has its own HttpOnly, SameSite session cookie and CSRF-protected actions; normal Phone and Mac credentials never grant admin access. Sessions expire after six hours and on restart. Never commit the password; `.admin-password` is ignored for a private local owner copy.
 
 The dashboard shows the running app/commit, storage reads, AI configuration and shared quota counters, optional Mac availability, reminder ticks, recent HTTP failures and categorical phone runtime/microphone reports. AI configuration does not prove the provider is answering. Problems and request metrics cover the current server run; the latest 100 admin account actions persist with durable storage. Sanitized failing server requests log a request ID to Render. Diagnostic exports omit account IDs. No chat text, saved content, photos, credentials, push endpoints or raw client errors are returned by admin.
 
