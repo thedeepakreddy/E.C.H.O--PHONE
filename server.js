@@ -71,7 +71,7 @@ const PUBLIC = join(fileURLToPath(new URL(".", import.meta.url)), "public");
 /** The app's version: a hash of its files, so an open app can tell it's out of date and reload. */
 export const APP_VERSION = (() => {
   const h = createHash("sha256");
-  for (const f of ["markdown.js", "markdown.css", "vendor/markdown-it.min.js", "vendor/purify.min.js", "index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "bots.js", "bots.css", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
+  for (const f of ["markdown.js", "markdown.css", "vendor/markdown-it.min.js", "vendor/purify.min.js", "index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "bots.js", "bots.css", "agent-office.js", "agent-office.css", "agent-office-scene.js", "vendor/three.module.min.js", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
   return h.digest("hex").slice(0, 12);
 })();
 const TYPES = {
@@ -243,9 +243,9 @@ export function createRelay({
       if(!acquired)throw new CloudError('busy','Your bots are being updated. Retry shortly.');
       try{return await withKey(key,botState,fn,options);}finally{await store.releaseLease(lock,owner);}
     },
-    execute:async({bot,goal,history,context,signal,ensure,onEvent})=>{
+    execute:async({bot,goal,history,context,signal,ensure,onEvent,takeUpdates})=>{
       if(!cloud)throw new CloudError('setup','Bots need Phone mode’s configured brain.');
-      const mem=await memoryFor(context.device,context.tz);const result=await cloud.chat({text:goal,history,context,memory:mem,bot:{...bot,runId:context.requestId},signal,ensure,onEvent});withLinks(result.actions);return result;
+      const mem=await memoryFor(context.device,context.tz);const result=await cloud.chat({text:goal,history,context,memory:mem,bot:{...bot,runId:context.requestId},signal,ensure,onEvent,takeUpdates});withLinks(result.actions);return result;
     },
   });
   /** Memory as Echo's phone brain uses it: this phone's, found or saved by the tools in lib/cloud.js. */
@@ -1111,6 +1111,7 @@ export function createRelay({
         if(b.action==='save')return send(res,200,{bot:await bots.save(device,b)});
         if(b.action==='remove')return send(res,200,await bots.remove(device,b));
         if(b.action==='stop')return send(res,200,await bots.stop(device,b.id));
+        if(b.action==='control')return send(res,200,await bots.control(device,b));
         if(b.action==='run'){
           if(!cloud)throw new CloudError('setup','Bots need Phone mode’s brain configuration.');
           const context={...(b.context&&typeof b.context==='object'?b.context:{}),device,requestId:b.requestId,macOnline};

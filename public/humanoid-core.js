@@ -353,7 +353,9 @@
   /* ---------------------------------------------------------------
      Stage renderer.
   ----------------------------------------------------------------*/
+  var defaultStageState = shared;
   function createStage(canvas, opts) {
+    var shared = opts.state || defaultStageState;
     var ctx = canvas.getContext("2d");
     var FG = figMetrics(opts.figW || 1200);
     var FIG_W = FG.w, FIG_H = FG.h, FIG_U = FG.u, FIG_OX = FG.ox, FIG_OY = FG.oy;
@@ -795,7 +797,8 @@
     return {
       resize: resize,
       draw: draw,
-      get visible() { return visible; }
+      get visible() { return visible; },
+      dispose: function () { io.disconnect(); }
     };
   }
 
@@ -804,6 +807,19 @@
      Phone binding.
   ----------------------------------------------------------------*/
   var canvas = document.getElementById("core-canvas");
+  window.EchoHumanoid = {
+    mount: function (target) {
+      var state = Object.assign({}, shared, {assembleAt:performance.now()-3000,level:0,gazeX:0,gazeY:0,wantX:0,wantY:0});
+      var mounted = createStage(target, {state:state,unitW:.60,unitH:.46,originX:.5,originY:.326,seed:42,figW:480,stride:3,dprCap:1.5});
+      mounted.resize();
+      return {resize:mounted.resize,dispose:mounted.dispose,draw:function(now,status){
+        state.status=status||'idle';
+        state.level=state.status==='thinking'?.12:0;
+        state.gazeX=reduceMotion?0:Math.sin(now/4500)*.12;
+        mounted.draw(now);
+      }};
+    }
+  };
   if (!canvas) return;
 
   /* Framed for a phone: the stage is the space between the header and the

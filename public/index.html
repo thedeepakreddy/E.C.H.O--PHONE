@@ -18,6 +18,7 @@
 <meta name="app-version" content="__APP_VERSION__">
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/bots.css">
+<link rel="stylesheet" href="/agent-office.css">
 <link rel="stylesheet" href="/markdown.css">
 </head>
 <body data-view="signin">
@@ -204,7 +205,8 @@
 <section id="v-bots" class="view list-view" aria-label="Bots" hidden>
   <header class="top push"><button class="glass pill back" data-back>‹ Back</button><h1>Bots</h1><button class="glass pill" id="bots-refresh">Refresh</button></header>
   <div class="scroll">
-    <section class="glass bcard"><h2>Your bots</h2><p class="sub small">Give a bot a task and come back to its result. Phone bots work on their own. Mac bots use your connected Mac’s tools.</p>
+    <section id="agent-office" aria-label="Live agent workspace"></section>
+    <section class="glass bcard"><h2>Your bots</h2><p class="sub small">Give a bot a task and come back to its result. Phone bots work on their own. Mac bots use your connected Mac’s tools. One task runs at a time on each device.</p>
       <p id="bots-storage" class="sub tiny"></p>
       <form id="bots-run"><label class="sub small" for="bots-target">Run on</label><select class="glass field" id="bots-target"><option value="phone">This phone</option><option value="mac">Your Mac</option></select><label class="sub small" for="bots-member">Bot</label><select class="glass field" id="bots-member" required></select><p id="bots-role" class="sub small"></p><div class="btns2" id="bots-edit-buttons" hidden><button class="glass small-pill" id="bots-edit" type="button">Edit role</button><button class="glass small-pill" id="bots-remove" type="button">Remove bot</button></div><label class="sub small" for="bots-goal">What should it do?</label><textarea class="glass field" id="bots-goal" required maxlength="4000" rows="3" placeholder="Research three options and prepare a useful comparison"></textarea><p id="bots-followup" class="sub small" hidden></p><div class="btns2"><button type="submit" class="glass big-btn">Start task</button><button id="bots-fresh" type="button" class="glass big-btn" hidden>New task</button></div></form>
       <p id="bots-status" class="sub small" role="status"></p><button id="bots-add-open" type="button" class="glass small-pill">Create a phone bot</button>
@@ -557,6 +559,7 @@
 <script src="/voice-session.js" defer></script>
 <script src="/speech-particles.js" defer></script>
 <script src="/bots.js" defer></script>
+<script src="/agent-office.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>
