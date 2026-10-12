@@ -71,12 +71,12 @@ const PUBLIC = join(fileURLToPath(new URL(".", import.meta.url)), "public");
 /** The app's version: a hash of its files, so an open app can tell it's out of date and reload. */
 export const APP_VERSION = (() => {
   const h = createHash("sha256");
-  for (const f of ["markdown.js", "markdown.css", "vendor/markdown-it.min.js", "vendor/purify.min.js", "index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "bots.js", "bots.css", "agent-office.js", "agent-office.css", "agent-office-scene.js", "vendor/three.module.min.js", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
+  for (const f of ["markdown.js", "markdown.css", "vendor/markdown-it.min.js", "vendor/purify.min.js", "index.html", "app.js", "experience.js", "voice-session.js", "speech-particles.js", "bots.js", "bots.css", "agent-office.js", "agent-office.css", "agent-office-scene.js", "office-assets/office.webp", "office-assets/research.webp", "office-assets/plan.webp", "office-assets/write.webp", "office-assets/review.webp", "vendor/three.module.min.js", "app.css", "humanoid-core.js", "sw.js", "admin.html", "admin.js", "admin.css"]) { try { h.update(readFileSync(join(PUBLIC, f))); } catch { /* missing in tests */ } }
   return h.digest("hex").slice(0, 12);
 })();
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-  ".png": "image/png", ".jpg": "image/jpeg", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8",
+  ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8",
 };
 // Everything the phone app is allowed to load: this origin and nothing else.
 const SECURITY = {

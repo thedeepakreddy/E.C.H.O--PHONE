@@ -76,11 +76,11 @@ try {
   await page.locator('#sheet-experience').getByRole('button', {name: 'Close', exact: true}).click();
   await open('bots');
   await page.locator('#bots-member option').first().waitFor({state: 'attached'});
+  await page.getByRole('button', {name: 'Assign task', exact: true}).click();
   await page.locator('#bots-goal').fill('Prepare a clear project plan from my notes.');
   await page.locator('#bots-member').selectOption('plan');
   await page.locator('#bots-run button[type=submit]').click();
-  await page.locator('#bots-refresh').click();
-  await page.locator('#bots-jobs .echo-markdown h2').waitFor();
+  await page.waitForFunction(() => !!document.querySelector('#bots-jobs .echo-markdown h2'));
   await capture('bots', 'Bots');
   for (const [id, title] of [['browser','Echo Browser'],['world','World Intelligence'],['memory','Saved'],['more','More'],['account','Recovery and sync'],['settings','Settings'],['mac','Optional Mac connection'],['missions','Mac missions'],['snap','Snap'],['briefing','Briefing'],['brain','Brain']]) {
     if (id === 'briefing') {
