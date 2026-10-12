@@ -3,6 +3,25 @@ import {createStore} from '../lib/store.js';import {createBots,botState} from '.
 import {toProviderMessages} from '../lib/vendor/openbot/history.js';import {NO_ANSWER_CAME} from '../lib/vendor/openbot/bot-prompt.js';import {runAgentTurn} from '../lib/vendor/openbot/agent-turn.js';
 import {createCloud} from '../lib/cloud.js';
 const wait=async fn=>{for(let i=0;i<150;i++){if(await fn())return;await new Promise(r=>setTimeout(r,10));}throw new Error('Run did not settle');};
+test('Phone specialists share Echo chat’s configured brain/model, not a role-specific Claude client',async()=>{
+ for(const model of ['configured-phone-brain-a','configured-phone-brain-b']){
+  const requests=[],gemini={model,generate:async(body,options)=>{requests.push({body,model:options.modelId});return {candidates:[{content:{role:'model',parts:[{text:'Verified fixture response.'}]}}]};}};
+  const cloud=createCloud({gemini,store:createStore({key:Buffer.alloc(32)}),tools:{}});
+  await cloud.chat({text:'Ordinary Echo chat'});
+  for(const id of ['research','plan','write','review','analyse','echo-assistant'])await cloud.chat({text:'Specialist task',bot:{id,name:id,role:'Fixture role',mode:'research',model:'claude-must-not-override',runId:randomUUID()}});
+  assert.equal(requests.length,7);assert.ok(requests.every(r=>r.model===model),'Normal chat and every specialist use the same configured model');
+ }
+});
+test('office telemetry follows real source reads, streaming text and tool completion, and ignores late events after stop',async()=>{
+ const state=botState();let events,release;
+ const engine=createBots({withState:async(_d,fn)=>fn(state),execute:async({onEvent})=>{events=onEvent;await new Promise(r=>release=r);return {reply:'Done'};}}),id=randomUUID();
+ await engine.run('owner',{requestId:id,botId:'research',revision:1,goal:'Read sources'});await wait(()=>events);
+ await events({type:'TOOL_CALL_START',toolCallName:'web_search'});assert.equal((await engine.list('owner')).jobs[0].activity.kind,'reading');
+ await events({type:'TOOL_CALL_RESULT',toolCallName:'web_search'});assert.equal((await engine.list('owner')).jobs[0].activity.kind,'working');
+ await events({type:'TEXT_MESSAGE_CONTENT',delta:'Verified sources'});assert.equal((await engine.list('owner')).jobs[0].activity.kind,'writing');
+ await events({type:'TEXT_MESSAGE_END'});assert.equal((await engine.list('owner')).jobs[0].draft,'Verified sources');
+ await engine.stop('owner',id);await assert.rejects(events({type:'TEXT_MESSAGE_CONTENT',delta:'Late text'}),/stopped/);release();await wait(()=>engine.activeCount()===0);assert.equal((await engine.list('owner')).jobs[0].status,'stopped');
+});
 test('OpenBot source repairs restored tool order, preserves dialects and closes unanswered calls',()=>{
  const m=toProviderMessages({guidance:'Echo capabilities',messages:[{role:'tool',toolCallId:'a',content:'real result'},{role:'assistant',toolCalls:[{id:'a',name:'lookup',args:{q:'one'}},{id:'b',function:{name:'ask',arguments:'{}'}}]}]});assert.equal(m[1].tool_calls[0].function.name,'lookup');assert.equal(m[2].content,'real result');assert.equal(m[3].content,NO_ANSWER_CAME);assert.ok(!m.some(x=>x.content?.includes?.('computer_navigate')));
 });

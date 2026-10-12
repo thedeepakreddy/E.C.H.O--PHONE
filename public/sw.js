@@ -3,8 +3,9 @@
  * its shell with no signal. Only these files: nothing from Echo (status, chat,
  * the screen) is ever cached — it is fetched live or not at all.
  */
-const CACHE = "echo-shell-v39";
+const CACHE = "echo-shell-v42";
 const SHELL = ["/markdown.js", "/markdown.css", "/vendor/markdown-it.min.js", "/vendor/purify.min.js", "/", "/app.css", "/app.js", "/bots.js", "/bots.css", "/agent-office.js", "/agent-office.css", "/agent-office-scene.js", "/office-assets/office.webp", "/office-assets/research.webp", "/office-assets/plan.webp", "/office-assets/write.webp", "/office-assets/review.webp", "/vendor/three.module.min.js", "/experience.js", "/voice-session.js", "/speech-particles.js", "/humanoid-core.js", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/apple-touch-icon.png", "/img/reactor.png", "/img/reactor-core.png", "/img/reactor-mid.png", "/img/reactor-outer.png", "/img/osiris.jpg"];
+SHELL.push('/agent-office-avatar.js','/agent-office-behavior.js','/agent-office-props.js','/agent-office-environment.js','/agent-office-navigation.js');
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -16,7 +17,9 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
   const path = url.pathname === "/index.html" ? "/" : url.pathname;
-  if (!SHELL.includes(path)) return; // the API goes straight to the network
+  // Heavy, public scene artwork is cached only after it is viewed, not during
+  // app installation. Agent/task data and every API still go to the network.
+  if (!SHELL.includes(path) && !path.startsWith('/office-assets/')) return;
   // Newest copy when online (so an update shows on the next open), cached copy when not.
   e.respondWith(fetch(e.request).then((r) => {
     if (r.ok) { const copy = r.clone(); caches.open(CACHE).then((c) => c.put(path, copy)); }

@@ -5,7 +5,7 @@ window.initEchoBots=({$,el,clear,cloudApi,api,cloudContext,runAction,prepareActi
  const target=()=>$('bots-target').value;
  const status=t=>{for(const id of ['bots-status','bots-dialog-status'])$(id).textContent=t;};
  const assignment=$('bots-assignment');
- function openAssignment(){if(!assignment.open)assignment.showModal();$('bots-goal').focus();}
+ function openAssignment(){const history=$('bots-history');if(history?.open)history.close();if(!assignment.open)assignment.showModal();$('bots-goal').focus();}
  $('bots-assignment-close').onclick=()=>assignment.close();
  const active=j=>['queued','running'].includes(j.status)&&j.live!==false;
  const office=window.EchoAgentOffice.mount($('agent-office'),{target:target(),visible,
