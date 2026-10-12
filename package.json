@@ -13,6 +13,7 @@
     "test": "node --test test/",
     "test:ui:bots": "node scripts/bots-ui-test.mjs",
     "test:ui:office": "node scripts/agent-office-ui-test.mjs",
+    "test:ui:retry": "node scripts/agent-retry-ui-test.mjs",
     "test:ui:markdown": "node scripts/markdown-ui-test.mjs"
   },
   "dependencies": {

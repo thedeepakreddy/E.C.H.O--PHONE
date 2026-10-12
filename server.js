@@ -246,9 +246,9 @@ export function createRelay({
       if(!acquired)throw new CloudError('busy','Your bots are being updated. Retry shortly.');
       try{return await withKey(key,botState,fn,options);}finally{await store.releaseLease(lock,owner);}
     },
-    execute:async({bot,goal,history,context,signal,ensure,onEvent,takeUpdates})=>{
+    execute:async({bot,goal,history,context,signal,ensure,onEvent,takeUpdates,onCheckpoint,checkpoint,appliedUpdates,resumeFallback,partialDraft})=>{
       if(!cloud)throw new CloudError('setup','Bots need Phone mode’s configured brain.');
-      const mem=await memoryFor(context.device,context.tz);const result=await cloud.chat({text:goal,history,context,memory:mem,bot:{...bot,runId:context.requestId},signal,ensure,onEvent,takeUpdates});withLinks(result.actions);return result;
+      const mem=await memoryFor(context.device,context.tz);const result=await cloud.chat({text:goal,history,context,memory:mem,bot:{...bot,runId:context.requestId},signal,ensure,onEvent,takeUpdates,onCheckpoint,checkpoint,appliedUpdates,resumeFallback,partialDraft});withLinks(result.actions);return result;
     },
   });
   /** Memory as Echo's phone brain uses it: this phone's, found or saved by the tools in lib/cloud.js. */

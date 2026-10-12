@@ -15,6 +15,7 @@ The Bots page and the Agents → Agent office link open one workspace backed by 
 | Control | Runtime behavior |
 | --- | --- |
 | Send update | Queued for the exact run/task/attempt. Applied is acknowledged only when the provider consumes it at a safe turn boundary. |
+| Retry | Appears for a failed specialist. Continues owner-saved progress using the device’s currently configured brain; never submits the task from scratch silently. |
 | Interrupt & revise | Mac cancels only the selected task and schedules a fresh attempt with unique actor/task IDs. Waiting dependent reports use the new result. Phone stops its current run and starts one linked follow-up with a fresh run ID. |
 | Stop agent (agent menu) | Cancels the exact selected task. Mac dependent reports are blocked rather than silently using an incomplete result. |
 | Stop team (agent menu) | Stops the current Mac team, not another run or device. |
@@ -24,7 +25,21 @@ Commands carry a UUID, exact task identity and attempt. Identical retries return
 
 Mac Gemini, OpenAI and Ollama support safe live updates. Claude currently supports interruption/revision, not live updates; Send update is disabled honestly. Revisions are rejected if a downstream report has already consumed the selected task. Stop is not rollback: an already-started effect may finish, and changes already made remain. Existing task grants, private mode, time budgets, durable state, owner checks and model/tool limits remain authoritative. Each device still permits one active bot mission; the office does not introduce hidden parallel jobs.
 
-## Verification
+## Failed-agent recovery — October 13
+
+Retry is one primary glass button in the selected agent’s inspector: the native 36px Mac control or 44px Phone control. Finished and stopped agents do not show it; offline and busy controls are disabled. It needs no new instruction. Request IDs survive transport failures and a missing acknowledgment reconciles with the accepted attempt instead of starting another worker.
+
+Mac starts a fresh provider attempt with the saved partial draft, completed tool journal, artifacts and applied updates. This is continuation from durable progress, **not** resuming an undocumented live provider session. Completed teammates are retained; never-started reports blocked by this dependency can proceed again. The canonical mission stays the same, with immutable coordinator attempts for terminal retries. Recovery after a restart and deletion of retry records are covered by regression tests. Previously successful matching writes return the saved outcome without executing the handler again; missing journal/outcome data fails closed.
+
+Phone saves actual provider messages, tool-response groups, completed effects, applied updates and partial output in the owner’s bot state. A valid checkpoint resumes at the next unfinished step. Older runs without a full checkpoint use explicitly labeled saved-context continuation and block writes. Temporary server storage cannot survive a server restart; durable account storage is required for that guarantee.
+
+Both paths refuse uncertain external effects, changed agent roles/grants and stale attempts. Retry does not roll back changes or bypass account access, privacy, confirmation, resource locks or tool grants. Time-budget exhaustion is a failure eligible for Retry; deliberate Stop remains stopped and needs a follow-up instead. Each attempt has a fresh bounded runtime budget; at most ten attempts are allowed before the user must review the failure and choose a follow-up. Phone retains 30 runs and 256 retry acknowledgments; expired records never silently create another attempt. Echo remains the coordinator, not a retryable office specialist. This change does not add automatic voice delivery.
+
+Focused checks: Mac `agentretrytest` plus native `test:panel-office`; Phone `test/agent-control.test.mjs` plus `test:ui:retry` in Chromium and WebKit. Fixtures verify saved tool results, partial drafts, exact routing, dependency reactivation, repeated clicks, lost acknowledgments, offline controls, uncertain writes and late worker results. No live model calls or production tasks are used.
+
+Pre-publication verification: Mac offline suite 120/120, build and native office controls; Phone offline suite 170/170, Retry and existing Bots controls in Chromium/WebKit. External HTTP was blocked during both offline suites. Retry previews contain isolated example tasks, not production activity.
+
+## Earlier office verification
 
 Mac: `npm run typecheck`, `npm run botstest`, `npm run agentcontroltest`, scheduler/mission/interjection regressions, `npm run test:panel-bots`, `npm run test:panel-office` and the application build. Dedicated controls tests cover exact-agent routing, acknowledgements, pending updates, retries, revision attempts, late-result fences and per-agent interruption. Desktop UI tests cover the restricted IPC bridge, provider capabilities, draft retention, responsive layouts, lighting, paused animation and offline controls.
 
