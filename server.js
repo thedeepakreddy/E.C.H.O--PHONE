@@ -221,7 +221,7 @@ export function createRelay({
     const run = prev.then(async () => {
       const value = (await store.get(key)) ?? empty();
       const result = await fn(value);
-      if (save) await store.set(key, value, ttl);
+      if (typeof save === 'function' ? save() : save) await store.set(key, value, ttl);
       return result;
     });
     const tail = run.catch(() => {});
@@ -327,6 +327,8 @@ export function createRelay({
   const waiters = [];
   /** Requests Echo has collected and not yet answered, by id. */
   const inFlight = new Map();
+  // Admission includes bodies still being read, queued work and handed-off work.
+  const admitted = new Map();
   const logins = new Map();
   let world = null, worldCheckedAt = null, worldLoading = null;
   const weatherCache = new Map();
@@ -472,17 +474,23 @@ export function createRelay({
     res.end(data);
   }
 
-  function readBody(req, limit = MAX_BODY) {
+  function readBody(req, limit = MAX_BODY, signal) {
     return new Promise((resolve, reject) => {
       const chunks = [];
       let size = 0;
-      req.on("data", (c) => {
+      const cleanup=()=>{req.off('data',data);req.off('end',end);req.off('error',error);req.off('aborted',aborted);signal?.removeEventListener('abort',cancel);};
+      const error=issue=>{cleanup();reject(issue);};
+      const aborted=()=>error(new Error('Request disconnected.'));
+      const cancel=()=>{error(signal.reason??new Error('Request cancelled.'));req.resume();};
+      const end=()=>{cleanup();resolve(Buffer.concat(chunks));};
+      const data=(c) => {
         size += c.length;
-        if (size > limit) { reject(Object.assign(new Error("too large"), { status: 413 })); req.destroy(); return; }
+        if (size > limit) { error(Object.assign(new Error("too large"), { status: 413 })); req.resume(); return; }
         chunks.push(c);
-      });
-      req.on("end", () => resolve(Buffer.concat(chunks)));
-      req.on("error", reject);
+      };
+      req.on('data',data);req.once('end',end);req.once('error',error);req.once('aborted',aborted);
+      signal?.addEventListener('abort',cancel,{once:true});
+      if(signal?.aborted)cancel();else if(req.aborted)aborted();
     });
   }
 
@@ -500,7 +508,7 @@ export function createRelay({
 
   async function forward(req, res, path, search) {
     if (!online()) return send(res, 503, { error: "offline", message: "Echo is offline — your Mac is asleep, off, or not connected." });
-    if (queue.length >= MAX_QUEUE) return send(res, 503, { error: "busy", message: "Too many requests at once." });
+    if (admitted.size >= MAX_QUEUE) return send(res, 503, { error: "busy", message: "Too many requests at once." });
     const ip = clientIp(req);
     // Sign-in attempts count against the address until Echo accepts one, so a
     // correct password never uses up the allowance — only guesses do.
@@ -512,39 +520,45 @@ export function createRelay({
       recent.push(attempt);
       logins.set(ip, recent);
     }
-    let body;
-    try { body = await readBody(req); } catch (e) { return send(res, e.status ?? 400, { error: "Request too large." }); }
     const id = randomUUID();
-    const wire = {
-      id, method: req.method, path: path + search, ip,
-      headers: { "content-type": req.headers["content-type"] ?? "", cookie: req.headers.cookie ?? "" },
-      body: body.length ? body.toString("base64") : "",
-    };
+    const bodyAbort=new AbortController();let settled=false;
     const limit = path === "/voice" || path === "/chat/voice" ? Math.max(requestMs, SLOW_REQUEST_MS) : requestMs;
+    const release=()=>{
+      if(settled)return false;settled=true;
+      clearTimeout(job.timer);admitted.delete(id);inFlight.delete(id);
+      const index=queue.indexOf(job);if(index>=0)queue.splice(index,1);
+      bodyAbort.abort(new Error('Relay request ended.'));return true;
+    };
     const job = {
-      id, wire,
+      id, wire:null,
       respond: (status, headers, payload) => {
-        clearTimeout(job.timer);
-        inFlight.delete(id);
-        const idx = queue.indexOf(job);
-        if (idx >= 0) queue.splice(idx, 1);
+        if(!release())return;
         if (attempt && status < 400) {
           const list = logins.get(ip) ?? [];
           const at = list.indexOf(attempt);
           if (at >= 0) list.splice(at, 1);
           if (!list.length) logins.delete(ip);
         }
-        if (res.writableEnded) return;
+        if (res.writableEnded || res.destroyed) return;
         const out = { "cache-control": "no-store" };
         for (const name of ["content-type", "set-cookie", "cache-control"]) if (headers?.[name]) out[name] = headers[name];
         res.writeHead(status, { ...SECURITY, ...out });
         res.end(payload);
       },
     };
+    admitted.set(id,job); // Reserve synchronously, before the first body await.
     job.timer = setTimeout(() => job.respond(504, { "content-type": "application/json" }, JSON.stringify({ error: "Echo didn't answer in time." })), limit);
     // The phone gave up (closed the app, lost signal): forget the request. The
     // response's close, not the request's, which fires once the body is read.
-    res.on("close", () => { if (!res.writableEnded) { clearTimeout(job.timer); inFlight.delete(id); const i = queue.indexOf(job); if (i >= 0) queue.splice(i, 1); } });
+    res.once("close", release);
+    let body;
+    try { body = await readBody(req,MAX_BODY,bodyAbort.signal); }
+    catch(error){if(!settled)job.respond(error.status??400,{'content-type':'application/json'},JSON.stringify({error:error.status===413?'Request too large.':'Request body could not be read.'}));return;}
+    if(settled)return;
+    if(!online()){job.respond(503,{'content-type':'application/json'},JSON.stringify({error:'offline',message:'Echo went offline.'}));return;}
+    job.wire={id,method:req.method,path:path+search,ip,
+      headers:{'content-type':req.headers['content-type']??'',cookie:req.headers.cookie??''},
+      body:body.length?body.toString('base64'):''};
     queue.push(job);
     dispatch();
   }
@@ -575,7 +589,7 @@ export function createRelay({
   function dropped() {
     lastPoll = 0;
     const gone = JSON.stringify({ error: "offline", message: "Echo went offline." });
-    for (const job of [...inFlight.values(), ...queue]) job.respond(503, { "content-type": "application/json" }, gone);
+    for (const job of [...admitted.values()]) job.respond(503, { "content-type": "application/json" }, gone);
   }
 
   /** Echo reports on a hand-off job; a finished one becomes a notification on the phone that left it. */
@@ -1388,7 +1402,7 @@ export function createRelay({
     if (req.method === "GET") return serveStatic(res, path);
     send(res, 404, "Not found");
   };
-  return { handler, keys, tick, vapid, state: () => ({ online: online(), queued: queue.length, waiting: waiters.length, inFlight: inFlight.size, passGen }) };
+  return { handler, keys, tick, vapid, state: () => ({ online: online(), queued: queue.length, waiting: waiters.length, inFlight: inFlight.size, admitted:admitted.size, passGen }) };
 }
 
 async function defaultFetchJson(url, { metadata = false } = {}) {

@@ -16,8 +16,10 @@ test('office telemetry follows real source reads, streaming text and tool comple
  const state=botState();let events,release;
  const engine=createBots({withState:async(_d,fn)=>fn(state),execute:async({onEvent})=>{events=onEvent;await new Promise(r=>release=r);return {reply:'Done'};}}),id=randomUUID();
  await engine.run('owner',{requestId:id,botId:'research',revision:1,goal:'Read sources'});await wait(()=>events);
- await events({type:'TOOL_CALL_START',toolCallName:'web_search'});assert.equal((await engine.list('owner')).jobs[0].activity.kind,'reading');
- await events({type:'TOOL_CALL_RESULT',toolCallName:'web_search'});assert.equal((await engine.list('owner')).jobs[0].activity.kind,'working');
+ const identity={botId:'research',runId:id,requestId:id,attempt:1,toolCallId:'search-call',toolAttemptId:'search-attempt',toolCallName:'web_search'};
+ await events({...identity,type:'TOOL_CALL_START'});assert.equal((await engine.list('owner')).jobs[0].activity.kind,'reading');
+ await events({...identity,type:'TOOL_CALL_END',status:'success'});assert.equal((await engine.list('owner')).jobs[0].activity.kind,'working');
+ await events({...identity,type:'TOOL_CALL_RESULT',status:'success'});
  await events({type:'TEXT_MESSAGE_CONTENT',delta:'Verified sources'});assert.equal((await engine.list('owner')).jobs[0].activity.kind,'writing');
  await events({type:'TEXT_MESSAGE_END'});assert.equal((await engine.list('owner')).jobs[0].draft,'Verified sources');
  await engine.stop('owner',id);await assert.rejects(events({type:'TEXT_MESSAGE_CONTENT',delta:'Late text'}),/stopped/);release();await wait(()=>engine.activeCount()===0);assert.equal((await engine.list('owner')).jobs[0].status,'stopped');
@@ -26,7 +28,7 @@ test('OpenBot source repairs restored tool order, preserves dialects and closes 
  const m=toProviderMessages({guidance:'Echo capabilities',messages:[{role:'tool',toolCallId:'a',content:'real result'},{role:'assistant',toolCalls:[{id:'a',name:'lookup',args:{q:'one'}},{id:'b',function:{name:'ask',arguments:'{}'}}]}]});assert.equal(m[1].tool_calls[0].function.name,'lookup');assert.equal(m[2].content,'real result');assert.equal(m[3].content,NO_ANSWER_CAME);assert.ok(!m.some(x=>x.content?.includes?.('computer_navigate')));
 });
 test('OpenBot agent loop assembles fragmented calls, streams complete text and surfaces failures/cancellation',async()=>{
- const events=[];const r=await runAgentTurn({threadId:'t',runId:'r'},async()=>(async function*(){yield {choices:[{delta:{content:'Hello ',tool_calls:[{index:0,id:'call-a',function:{name:'get_today',arguments:'{"q":'}}]}}]};yield {choices:[{delta:{content:'world',tool_calls:[{index:0,function:{arguments:'"today"}'}}]}}]};})(),e=>events.push(e));assert.equal(r.text,'Hello world');assert.deepEqual(JSON.parse(r.calls[0].args),{q:'today'});assert.equal(events.at(-1).type,'RUN_FINISHED');assert.equal(events.filter(e=>e.type==='TOOL_CALL_START').length,1);
+ const events=[];const r=await runAgentTurn({threadId:'t',runId:'r'},async()=>(async function*(){yield {choices:[{delta:{content:'Hello ',tool_calls:[{index:0,id:'call-a',function:{name:'get_today',arguments:'{"q":'}}]}}]};yield {choices:[{delta:{content:'world',tool_calls:[{index:0,function:{arguments:'"today"}'}}]}}]};})(),e=>events.push(e));assert.equal(r.text,'Hello world');assert.deepEqual(JSON.parse(r.calls[0].args),{q:'today'});assert.equal(events.at(-1).type,'RUN_FINISHED');assert.equal(events.filter(e=>e.type==='TOOL_CALL_START').length,0);
  await assert.rejects(runAgentTurn({threadId:'t',runId:'bad'},async()=>{throw new Error('private provider data');},e=>events.push(e)));assert.equal(events.at(-1).type,'RUN_ERROR');assert.ok(!JSON.stringify(events).includes('private provider data'));
  const stop=new AbortController();stop.abort();await assert.rejects(runAgentTurn({threadId:'t',runId:'stopped'},async()=>{throw Error('must not call');},()=>{},stop.signal));
 });
@@ -47,11 +49,12 @@ test('real relay bots work without Mac, preserve tool grants and isolate account
  assert.equal((await api('bad')).status,401);assert.equal((await api(a)).body.bots.length,6);const requestId=randomUUID(),run={action:'run',requestId,botId:'plan',revision:1,goal:'Plan my day'};assert.equal((await api(a,run)).status,202);await wait(async()=>['done','failed'].includes((await api(a)).body.jobs[0]?.status));const result=(await api(a)).body.jobs[0];assert.equal(result.status,'done',JSON.stringify(result));assert.match(result.result.reply,/useful plan/);assert.ok(result.events.some(e=>e.tool==='get_today'));assert.equal((await api(b)).body.jobs.length,0);assert.equal((await api(b,{action:'stop',id:requestId})).status,400);const before=requests;assert.equal((await api(a,run)).body.repeated,true);assert.equal(requests,before);assert.equal((await api(a,{...run,goal:'Wrong task'})).status,400);
 });
 test('a research bot cannot save memory or delegate another bot, and essential questions pause rather than claim completion',async()=>{
- let effects=0,round=0;const store=createStore({key:Buffer.alloc(32)}),seen=[];
+ let effects=0,round=0,checkpoint;const store=createStore({key:Buffer.alloc(32)}),seen=[];
  const gemini={model:'fixture',generate:async body=>{seen.push(body);return {candidates:[{content:{role:'model',parts:round++===0?[{functionCall:{name:'save_memory',args:{text:'must not be saved'}}},{functionCall:{name:'run_bot',args:{bot_id:'write',goal:'must not run'}}},{functionCall:{name:'ask_person',args:{question:'Which date should I use?'}}}]:[{text:'Which date should I use?'}]}}]};}};
- const cloud=createCloud({store,gemini,tools:{}}),result=await cloud.chat({text:'Research the plan',bot:{id:'research',name:'Research',mode:'research',role:'Research facts',runId:'r'},memory:{save:async()=>effects++,runBot:async()=>effects++}});
+ const cloud=createCloud({store,gemini,tools:{}}),result=await cloud.chat({text:'Research the plan',bot:{id:'research',name:'Research',mode:'research',role:'Research facts',runId:'r'},memory:{save:async()=>effects++,runBot:async()=>effects++},onCheckpoint:async cp=>{checkpoint=structuredClone(cp);}});
  assert.equal(effects,0);assert.equal(result.question,'Which date should I use?');assert.ok(!seen[0].tools[0].functionDeclarations.some(d=>['save_memory','run_bot'].includes(d.name)));
- const errors=seen[1].contents.flatMap(c=>c.parts).filter(p=>p.functionResponse?.response?.error);assert.equal(errors.length,2);
+ assert.equal(seen.length,1,'An essential question must stop subsequent model rounds');
+ const errors=checkpoint.pending.responses.filter(p=>p.functionResponse?.response?.error);assert.equal(errors.length,2);
  const states=new Map(),engine=createBots({withState:async(d,fn)=>{const st=states.get(d)??botState();states.set(d,st);return fn(st);},execute:async()=>result});await engine.run('owner',{requestId:randomUUID(),botId:'research',revision:1,goal:'Research plan'});await wait(()=>engine.activeCount()===0);assert.equal((await engine.list('owner')).jobs[0].status,'needs-you');
  await assert.rejects(createCloud({store,tools:{},gemini:{model:'empty',generate:async()=>({candidates:[]})}}).chat({text:'Try a task',bot:{id:'research',name:'Research',mode:'research',role:'Role',runId:'r'}}),/no usable model/);
 });

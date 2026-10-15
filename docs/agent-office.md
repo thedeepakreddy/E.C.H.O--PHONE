@@ -63,4 +63,35 @@ FINISH: Review the rendered Mac and Phone layouts and document the runtime/contr
 
 ## Local viewport polish — October 12
 
+Historical validation notes below describe the October 12 state. The October 14
+reliability changes supersede its unfinished voice-handoff note.
+
+## Office reliability — October 14
+
+Mac now exposes six genuine background specialists, including Verify; the
+internal Lead compiler is not a seventh desk. Failed compilation exposes
+**Retry final report** in workspace options on both clients. It recompiles saved
+completed reports without restarting specialists. Controls bind exact task,
+attempt and stable command UUID, including transport retries.
+
+Live animation starts at actual handler execution, not model-call assembly.
+Call/attempt identities pair completions without clearing a different active
+call. RecordingBrain preserves supported live updates and acknowledges actual
+provider-boundary consumption; unsupported providers remain honestly disabled.
+
+Retry and revision retain a valid bounded evidence manifest. Explicit
+owner-authorized source task and call IDs page original evidence rather than
+silently cutting JSON or losing older sources. Uncertain effects remain blocked.
+
+Echo queues voice handoffs only from committed, host-created office missions.
+Speech waits for an idle local voice lane and matching project scope; private
+content is withheld. Durable claims precede playback and only a real playback
+acknowledgment marks delivery complete. Stop cancels queued/in-flight delivery,
+including before the queue is initialized. Unknown claimed sound after a crash
+is never automatically repeated; the report remains readable in Tasks.
+
+Local fake-provider, queue, speech and browser fixtures are verification of
+these contracts, not proof of native audio, physical iPhone or deployed Render
+behavior. Changes remain local for user review.
+
 Both isolated UI suites verify the actual task/control adapters, 36/44px targets, exact task/attempt identity, retry IDs, hidden coordinator controls, six-seat fixtures, no workspace scrolling, preserved drafts, safe Markdown, history/follow-up/management, offline targets and reduced motion. Safari regressions cover deferred ResizeObserver writes and completed output remaining visible instead of shrinking to zero. The UI still shares one authoritative runner; this sizing pass does not add a new automatic voice-delivery mechanism. Echo voice completion reporting remains separate unfinished wiring work, rather than a claimed feature of the decorative coordinator tile. No push/deploy or 12UI reference upload occurred; production appearance and asset/performance gates remain pending.

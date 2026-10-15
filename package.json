@@ -10,10 +10,15 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/",
+    "test": "node scripts/test-offline.mjs",
+    "test:offline": "node scripts/test-offline.mjs",
+    "ci:offline": "node scripts/test-offline.mjs",
+    "test:ui": "node scripts/test-ui.mjs",
     "test:ui:bots": "node scripts/bots-ui-test.mjs",
     "test:ui:office": "node scripts/agent-office-ui-test.mjs",
     "test:ui:retry": "node scripts/agent-retry-ui-test.mjs",
+    "test:ui:reportretry": "node scripts/agent-report-retry-ui-test.mjs",
+    "test:ui:trackpad": "node scripts/trackpad-cancel-ui-test.mjs",
     "test:ui:markdown": "node scripts/markdown-ui-test.mjs"
   },
   "dependencies": {

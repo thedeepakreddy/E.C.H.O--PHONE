@@ -3338,24 +3338,43 @@
   // Trackpad: relative moves batched every 40 ms; a still short touch clicks, two double-click.
   const pad = $("pad");
   let touch = null, dx = 0, dy = 0, flushT = 0, lastTap = 0, tapT = 0;
-  const mouse = (action, extra) => api("/mouse", { json: { action, ...extra } }).catch(() => {});
-  const flush = () => { flushT = 0; if (dx || dy) { mouse("move", { dx: Math.round(dx), dy: Math.round(dy) }); dx = dy = 0; } };
-  pad.addEventListener("pointerdown", (e) => { e.preventDefault(); pad.setPointerCapture(e.pointerId); touch = { x: e.clientX, y: e.clientY, at: Date.now(), moved: 0 }; pad.classList.add("active"); });
+  let lastMacInputErrorAt = -Infinity, lastMacInputErrorMessage = "";
+  function reportMacInputError(err) {
+    const message = err?.message || "Couldn't reach your Mac.";
+    const now = performance.now();
+    if (message === lastMacInputErrorMessage && now - lastMacInputErrorAt < 1500) return;
+    lastMacInputErrorMessage = message; lastMacInputErrorAt = now;
+    toast(message, true);
+  }
+  const mouse = (action, extra) => api("/mouse", { json: { action, ...extra } }).catch(reportMacInputError);
+  const flush = () => { clearTimeout(flushT); flushT = 0; if (dx || dy) { mouse("move", { dx: Math.round(dx), dy: Math.round(dy) }); dx = dy = 0; } };
+  pad.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); if (touch) return;
+    pad.setPointerCapture(e.pointerId); touch = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, at: Date.now(), moved: 0 }; pad.classList.add("active");
+  });
   pad.addEventListener("pointermove", (e) => {
-    if (!touch) return;
+    if (!touch || touch.pointerId !== e.pointerId) return;
     const mx = e.clientX - touch.x, my = e.clientY - touch.y; touch.x = e.clientX; touch.y = e.clientY; touch.moved += Math.abs(mx) + Math.abs(my);
     dx += mx * 2.2; dy += my * 2.2; if (!flushT) flushT = setTimeout(flush, 40);
   });
-  const endTouch = () => {
-    if (!touch) return;
+  const endTouch = (e) => {
+    if (!touch || touch.pointerId !== e.pointerId) return;
     const tap = touch.moved < 8 && Date.now() - touch.at < 260; touch = null; pad.classList.remove("active"); flush();
     if (!tap) return;
     const now = Date.now();
     if (now - lastTap < 300) { clearTimeout(tapT); lastTap = 0; mouse("dclick"); } else { lastTap = now; tapT = setTimeout(() => mouse("click"), 300); }
   };
-  pad.addEventListener("pointerup", endTouch); pad.addEventListener("pointercancel", endTouch);
+  const cancelTouch = (e) => {
+    if (!touch || touch.pointerId !== e.pointerId) return;
+    touch = null; pad.classList.remove("active");
+    clearTimeout(flushT); clearTimeout(tapT);
+    dx = dy = flushT = tapT = lastTap = 0;
+    if (pad.hasPointerCapture(e.pointerId)) pad.releasePointerCapture(e.pointerId);
+  };
+  pad.addEventListener("pointerup", endTouch); pad.addEventListener("pointercancel", cancelTouch);
+  pad.addEventListener("lostpointercapture", cancelTouch);
   document.querySelectorAll("[data-mouse]").forEach((b) => b.addEventListener("click", () => mouse(b.dataset.mouse)));
-  document.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", () => api("/keys", { json: { key: b.dataset.key } }).catch(() => toast("Couldn't reach your Mac.", true))));
+  document.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", () => api("/keys", { json: { key: b.dataset.key } }).catch(reportMacInputError)));
   $("type-form").addEventListener("submit", async (e) => {
     e.preventDefault(); const text = $("type-text").value; if (!text) return;
     try { await api("/keys", { json: { text } }); $("type-text").value = ""; toast("Typed on your Mac"); } catch (err) { toast(err.message, true); }
