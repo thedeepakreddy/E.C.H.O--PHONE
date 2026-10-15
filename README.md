@@ -123,11 +123,14 @@ To set it up, add these to the service's **Environment** on Render:
 
 | Variable | What it's for |
 | --- | --- |
-| `GEMINI_API_KEY` | The cloud brain. Use a key from its own Google AI Studio project; the free tier is fine. Set `GEMINI_MODEL` to change the model. |
+| `GEMINI_API_KEY` | The cloud brain. Use a key from its own Google AI Studio project. Default: `gemini-3.8-flash`, with low thinking for interactive speed. Model access, pricing and quotas depend on your project. |
+| `GEMINI_MODEL` | Optional explicit model override, shared by Phone chat and all Office specialists. Remove an old `gemini-3.1-flash-lite` override (or set `gemini-3.8-flash`) when deploying the upgrade. Blank values use the default. |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Durable, encrypted storage on Upstash's free plan. Without them, the relay forgets everything when Render restarts. |
 | `QSTASH_TOKEN` | A wake-up every 5 minutes from Upstash QStash, so the relay stays awake and timed features can run. Also set `QSTASH_URL` if the Upstash console shows one. |
 
 `/healthz` shows whether Phone mode's brain and storage are set up.
+
+The default uses Google's [stable Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash), its latest general Flash model as checked on 15 October 2026. This is a capability-and-speed upgrade, not a promise of Flash-Lite latency or cost. Browsing retains its existing available-model selection and fallback chain; explicit model overrides remain authoritative. No unavailable-model fallback silently changes ordinary chat or agent brains.
 
 ### Morning briefing and reminders
 

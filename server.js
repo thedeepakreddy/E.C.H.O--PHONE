@@ -1426,7 +1426,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const keys = deriveKeys(relaySecret);
   const store = createStore({ url: env.UPSTASH_REDIS_REST_URL, token: env.UPSTASH_REDIS_REST_TOKEN, key: keys.store });
   const gemini = paired && env.GEMINI_API_KEY ? createGemini({
-    apiKey: env.GEMINI_API_KEY.trim(), model: (env.GEMINI_MODEL || "gemini-3.1-flash-lite").trim(),
+    apiKey: env.GEMINI_API_KEY.trim(), model: env.GEMINI_MODEL?.trim() || undefined,
     embedModel: (env.GEMINI_EMBED_MODEL || "gemini-embedding-001").trim(), base: env.GEMINI_BASE || undefined,
   }) : null;
   const relay = createRelay({
