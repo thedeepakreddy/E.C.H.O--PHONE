@@ -610,6 +610,7 @@
   // ---------- Phone mode: the cloud brain ----------
   async function cloudApi(path, json, { signal } = {}) {
     await ensurePhoneSession();
+    signal?.throwIfAborted();
     const r = await fetch(path, {
       method: json ? "POST" : "GET",
       headers: { "x-echo-pass": PASS, "x-echo-installation": INSTALLATION, ...(json ? { "content-type": "application/json" } : {}) },
@@ -942,6 +943,7 @@
   // chat once it's back (each with this phone's own id, so never twice).
   let chatAfter = 0, unread = 0, chatTyping = false, lastDay = "", chatLoaded = false, lastAt = 0;
   let cloudAbort = null, lastCloudLine = "", preparingCloud = false;
+  const cloudRetries = new Map(); // Runtime-only callbacks; never persist voice payloads.
   const messagesEl = $("messages");
   const CACHE_KEY = "echo_chat_cache", CACHE_MAX = 400;
   let chatCache = [];
@@ -971,6 +973,32 @@
     const n = el("div", `msg ${mine ? "me cta" : "echo glass"}${m.kind === "voice" ? " voice" : ""}`);
     if(mine)n.appendChild(document.createTextNode(m.text));
     else {const content=window.EchoMarkdown.render(m.text);content.addEventListener('load',()=>{if(stickToBottom)scrollMessages();},true);n.appendChild(content);}
+    if (m.cloudFailure) {
+      n.dataset.cloudFailure = 'true';
+      n.setAttribute('role', 'status');
+      if (m.retryable && cloudRetries.has(m.k)) {
+        const acts = el('div', 'acts');
+        const retry = el('button', 'glass act-btn', 'Retry');
+        retry.dataset.cloudRetry = 'true';
+        retry.type = 'button';
+        retry.disabled = cloudBusy;
+        retry.addEventListener('click', async event => {
+          event.stopPropagation();
+          if (cloudBusy || retry.disabled) return;
+          if (m.threadId !== currentThread) return toast('Open the original conversation to retry.', true);
+          const run = cloudRetries.get(m.k);
+          if (!run) return toast('This retry has expired. Review the conversation before sending again.', true);
+          retry.disabled = true;
+          try { await run(); } finally { retry.disabled = cloudBusy; }
+        });
+        acts.append(retry); n.append(acts);
+      }
+    }
+    if (m.modelInfo?.fallback) {
+      const notice = el('div', 'via', `${m.modelInfo.requested} was unavailable · answered with ${m.modelInfo.used}`);
+      notice.dataset.modelNotice = 'true';
+      n.append(notice);
+    }
     if (!mine && m.actions && m.actions.length) {
       const acts = el("div", "acts");
       for (const a of m.actions) {
@@ -1124,7 +1152,7 @@
 
   // ---------- Phone mode: asking Echo in the cloud ----------
   const shortcutList = () => String(store.get("echo_shortcuts") || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20);
-  function historyNow() { return byTime().slice(-20).map((m) => ({ role: m.from === "you" ? "user" : "echo", text: m.text })); }
+  function historyNow() { return byTime().filter(m => !m.cloudFailure).slice(-20).map((m) => ({ role: m.from === "you" ? "user" : "echo", text: m.text })); }
   function localTz() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } }
   function cloudContext() {
     const pl = place();
@@ -1143,11 +1171,35 @@
     if (!passValid()) { toast("Tap Get started to use Echo on this phone.", true); return null; }
     cloudAbort?.abort();
     const abort = (cloudAbort = new AbortController());
+    const request = structuredClone({ ...payload, threadId: payload.threadId ?? currentThread, context: payload.context ?? cloudContext() });
+    const requestAccount = DEV;
+    const failureKey = `${request.requestId}-failure`;
+    // A safe receipt authorizes one dispatch, not every later attempt. Stop or
+    // a lost reply after this point leaves an uncertain outcome, never Retry.
+    cloudRetries.delete(failureKey);
+    const startingFailure = chatCache.find(m => m.k === failureKey);
+    if (startingFailure) { startingFailure.retryable = false; saveCache(); }
+    let timedOut = false, cancel;
+    const cancelled = new Promise((_, reject) => {
+      cancel = () => reject(abort.signal.reason);
+      abort.signal.addEventListener('abort', cancel, { once: true });
+    });
+    const timer = setTimeout(() => { timedOut = true; abort.abort(new DOMException('Echo took too long to respond.', 'TimeoutError')); }, 45_000);
     setCloudBusy(true);
     try {
-      const d = await cloudApi(path, { ...payload, threadId: currentThread, context: cloudContext() }, { signal: abort.signal });
-      if (abort.signal.aborted || !current()) return null;
-      const reply = { k: payload.requestId ? `${payload.requestId}-echo` : newKey(), at: Date.now(), from: "echo", text: d.reply, kind: "text", src: "phone", threadId: currentThread,
+      const d = await Promise.race([cloudApi(path, request, { signal: abort.signal }), cancelled]);
+      clearTimeout(timer);
+      if (abort.signal.aborted || !current() || DEV !== requestAccount) return null;
+      const failed = chatCache.find(m => m.k === failureKey);
+      if (failed) {
+        dropMessage(failed);
+        if ($('toast').textContent === failed.text) { clearTimeout(toastTimer); $('toast').classList.remove('show'); }
+      }
+      cloudRetries.delete(failureKey);
+      const original = chatCache.find(m => m.k === request.requestId);
+      if (d.transcript && original?.kind === 'voice') { original.text = d.transcript; saveCache(); }
+      const reply = { k: payload.requestId ? `${payload.requestId}-echo` : newKey(), at: Date.now(), from: "echo", text: d.reply, kind: "text", src: "phone", threadId: request.threadId,
+        modelInfo: d.modelInfo,
         actions: d.actions || [], sources: d.sources || [], saved: d.saved || [], captures: d.captures || [], references: d.references || [] };
       putMessage(reply);
       prepareActions(reply);
@@ -1168,10 +1220,29 @@
       }
       return d;
     } catch (e) {
-      if (e.name !== "AbortError") toast(cloudProblem(e), true);
+      if ((e.name !== "AbortError" || timedOut) && current() && DEV === requestAccount) {
+        const text = timedOut
+          ? 'Echo took too long to respond. Check Chat and Today before sending this request again; it may already have started.'
+          : cloudProblem(e);
+        const retryable = !timedOut && e.data?.retryable === true;
+        cloudRetries.delete(failureKey);
+        if (retryable) {
+          while (cloudRetries.size >= 4) cloudRetries.delete(cloudRetries.keys().next().value);
+          const replay = typeof e.data?.retryVersion === 'string' ? { ...request, retryVersion: e.data.retryVersion } : request;
+          cloudRetries.set(failureKey, () => askCloud(path, replay, { speak: false, current: () => DEV === requestAccount && currentThread === request.threadId }));
+        }
+        const previous = chatCache.find(m => m.k === failureKey);
+        if (previous) dropMessage(previous);
+        putMessage({ k: failureKey, at: Date.now(), from: 'echo', text, kind: 'text', src: 'phone', threadId: request.threadId, cloudFailure: true, retryable });
+        toast(text, true);
+      } else if (e.name === 'AbortError' && startingFailure && DEV === requestAccount) {
+        startingFailure.text = 'Retry was stopped. Check Chat and Today before sending again; work may have started.';
+        saveCache();
+      }
       return null;
     } finally {
-      if (cloudAbort === abort) setCloudBusy(false);
+      clearTimeout(timer); abort.signal.removeEventListener('abort', cancel);
+      if (cloudAbort === abort) { setCloudBusy(false); renderChat(); }
     }
   }
   async function sendCloud(text) {
@@ -1183,7 +1254,7 @@
     const mine = { k: newKey(), at: Date.now(), from: "you", text, kind: "text", src: "phone", threadId: currentThread };
     putMessage(mine);
     const d = await askCloud("/cloud/chat", { text, history, requestId: mine.k });
-    if (!d) { dropMessage(mine); restoreInput(text); }
+    if (!d && !chatCache.some(m => m.k === `${mine.k}-failure`)) { dropMessage(mine); restoreInput(text); }
   }
   function toBase64(buf) {
     const bytes = new Uint8Array(buf);
@@ -1201,7 +1272,7 @@
     const mine = { k: newKey(), at: Date.now(), from: "you", text: "Voice message", kind: "voice", src: "phone", threadId: currentThread };
     putMessage(mine);
     const d = await askCloud("/cloud/voice", { audio: toBase64(wav), history, requestId: mine.k }, opts);
-    if (!d) { if (!chatCache.some((m) => m.k === `${mine.k}-echo`)) dropMessage(mine); return null; }
+    if (!d) { if (!chatCache.some((m) => m.k === `${mine.k}-echo` || m.k === `${mine.k}-failure`)) dropMessage(mine); return null; }
     if (d.transcript) { mine.text = d.transcript; saveCache(); renderChat(); }
     return opts.speak && !d.voiceSpoken ? null : d;
   }
@@ -1277,7 +1348,7 @@
   let syncing = false;
   async function syncToMac() {
     if (syncing || !S || !macOnline) return;
-    const todo = byTime().filter((m) => m.src === "phone" && !m.synced && !(m.kind === "voice" && m.text === "Voice message"));
+    const todo = byTime().filter((m) => m.src === "phone" && !m.synced && !m.cloudFailure && !(m.kind === "voice" && m.text === "Voice message"));
     if (!todo.length) return;
     syncing = true;
     try {
@@ -3400,12 +3471,15 @@
     cloud: cloudApi, show, view: () => currentView, tz: localTz, account: () => DEV, installation: INSTALLATION,
     toast, openSheet, closeSheets, hasSession: () => !!PASS, busy: () => cloudBusy || preparingCloud, typing: () => !!input.value.trim(),
     react: (expression) => window.echoCore?.react(expression), notifications: enableNotifications,
-    legacyMessages: () => chatCache.filter((m) => m.src === "phone" && !m.threadId),
+    legacyMessages: () => chatCache.filter((m) => m.src === "phone" && !m.threadId && !m.cloudFailure),
     setThread: (id, messages) => {
       if (currentThread && currentThread !== id) stopVoice();
       currentThread = id;
       if (cloudBusy) return;
-      chatCache = [...chatCache.filter((m) => m.src !== "phone" || (m.threadId && m.threadId !== id)), ...messages]; saveCache(); renderChat();
+      const failures = chatCache.filter(m => m.src === 'phone' && m.threadId === id && m.cloudFailure && !messages.some(message => message.k === m.k.replace(/-failure$/, '-echo')));
+      const pending = chatCache.filter(m => m.src === 'phone' && m.threadId === id && failures.some(failure => failure.k === `${m.k}-failure`));
+      const merged = new Map([...messages, ...pending, ...failures].map(message => [message.k, message]));
+      chatCache = [...chatCache.filter((m) => m.src !== "phone" || (m.threadId && m.threadId !== id)), ...merged.values()]; saveCache(); renderChat();
     },
     focusChat: () => input.focus(), openMemory: (id) => openMemory({ id }),
     ask: (text) => { mode = "phone"; store.set("echo_mode", "phone"); renderMode(); show("chat"); sendCloud(text); },

@@ -8,14 +8,14 @@ const scripts=JSON.parse(readFileSync(new URL('../package.json',import.meta.url)
 test('default, offline and CI scripts use the guarded Phone runner and preserve existing names',()=>{
  for(const name of ['test','test:offline','ci:offline'])assert.equal(scripts[name],'node scripts/test-offline.mjs');
  assert.equal(scripts['test:ui'],'node scripts/test-ui.mjs');
- for(const name of ['bots','office','retry','markdown','reportretry','trackpad'])assert.equal(typeof scripts[`test:ui:${name}`],'string');
+ for(const name of ['bots','office','retry','markdown','reportretry','trackpad','cloudrecovery'])assert.equal(typeof scripts[`test:ui:${name}`],'string');
  assert.equal(scripts.start,'node server.js');
  assert.equal(scripts['test:live'],undefined);assert.equal(scripts['test:device'],undefined);
 });
 
 test('UI selection is an explicit browser-fixture allowlist, never live or physical-device acceptance',async()=>{
  const {UI_TESTS,selectUI}=await import('../scripts/test-ui.mjs');
- const names=['bots','office','retry','reportretry','trackpad','markdown'].map(name=>`test:ui:${name}`);
+ const names=['bots','office','retry','reportretry','trackpad','markdown','cloudrecovery'].map(name=>`test:ui:${name}`);
  const mixed={...scripts,'test:ui:iphone':'native phone','test:ui:mac':'native Mac','test:live':'provider','test:device':'physical device'};
  assert.deepEqual(selectUI(mixed),names);
  assert.deepEqual(selectUI(mixed,['retry']),['test:ui:retry','test:ui:reportretry']);

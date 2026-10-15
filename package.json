@@ -19,7 +19,8 @@
     "test:ui:retry": "node scripts/agent-retry-ui-test.mjs",
     "test:ui:reportretry": "node scripts/agent-report-retry-ui-test.mjs",
     "test:ui:trackpad": "node scripts/trackpad-cancel-ui-test.mjs",
-    "test:ui:markdown": "node scripts/markdown-ui-test.mjs"
+    "test:ui:markdown": "node scripts/markdown-ui-test.mjs",
+    "test:ui:cloudrecovery": "node scripts/cloud-recovery-ui-test.mjs"
   },
   "dependencies": {
     "cheerio": "1.2.0",

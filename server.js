@@ -42,7 +42,7 @@ import { createStore } from "./lib/store.js";
 import { createAdmin } from "./lib/admin.js";
 import { MAC_ROUTES } from "./lib/mac-routes.js";
 import { metWeather, invalidWeather } from "./lib/weather.js";
-import { createGemini, pickBrowseModels } from "./lib/gemini.js";
+import { createGemini, pickBrowseModels, pickFallbackModels } from "./lib/gemini.js";
 import { createCloud, CloudError } from "./lib/cloud.js";
 import { buildIcs, validEvent } from "./lib/calendar.js";
 import { ensureSchedule } from "./lib/tick.js";
@@ -710,11 +710,11 @@ export function createRelay({
   async function readJson(req, limit) {
     return JSON.parse((await readBody(req, limit)).toString("utf8") || "{}");
   }
-  const CLOUD_STATUS = { setup: 503, cap: 429, quota: 429, minute: 429, busy: 429, input: 400, failed: 502 };
+  const CLOUD_STATUS = { setup: 503, unavailable: 503, cap: 429, quota: 429, minute: 429, busy: 429, input: 400, failed: 502 };
   function sendCloudError(res, e) {
     if (e?.suspended) return send(res, 403, { error: "suspended", message: e.message });
     if (e?.input) return send(res, 400, { error: "input", message: e.message });
-    if (e instanceof CloudError) return send(res, CLOUD_STATUS[e.kind] ?? 502, { error: e.kind, message: e.message, resetsAt: e.resetsAt ?? null, retryAfter: e.retryAfter ?? null });
+    if (e instanceof CloudError) return send(res, CLOUD_STATUS[e.kind] ?? 502, { error: e.kind, message: e.message, resetsAt: e.resetsAt ?? null, retryAfter: e.retryAfter ?? null, retryable: e.retryable === true, ...(e.retryable && typeof e.retryVersion === 'string' ? { retryVersion: e.retryVersion } : {}) });
     if (e?.status === 413) return send(res, 413, { error: "input", message: "That's too long to send." });
     if (e instanceof SyntaxError) return send(res, 400, { error: "input", message: "Bad request." });
     return send(res, 502, { error: "failed", message: "Phone mode had a problem. Try again." });
@@ -1140,6 +1140,11 @@ export function createRelay({
     if (path === "/cloud/chat" || path === "/cloud/voice") {
       if (!cloud) return send(res, 503, { error: "setup", message: "Phone mode isn't set up yet: add GEMINI_API_KEY on Render." });
       if (rateLimited(claims.device)) return send(res, 429, { error: "busy", message: "Slow down a little — too many messages this minute." });
+      const turn = new AbortController();
+      const ensure = async () => turn.signal.throwIfAborted();
+      const timer = setTimeout(() => turn.abort(new CloudError('unavailable', "Echo took too long to respond. Check Chat and Today before sending this request again.", { retryable: false })), 30_000);
+      const disconnected = () => { if (!res.writableEnded) turn.abort(new DOMException('The phone disconnected.', 'AbortError')); };
+      res.once('close', disconnected);
       try {
         const body = await readJson(req, path === "/cloud/voice" ? CLOUD_VOICE_BODY : CLOUD_BODY);
         const context = { ...(body.context && typeof body.context === "object" ? body.context : {}), macOnline };
@@ -1149,17 +1154,29 @@ export function createRelay({
         const threadId = body.threadId ? String(body.threadId).slice(0, 80) : null;
         // A separate turn lock permits memory and folder tools to change their own store keys.
         const result = await withKey(`turn:${device}:${threadId ?? "legacy"}`, () => ({}), async () => {
+          await ensure();
           const t = threadId ? await withConversations(device, (st) => threadFor(st, threadId), { save: false }) : null;
           const previous = t?.receipts.find((r) => r.id === requestId); if (previous) return previous.result;
+          const retryVersion = t?.messages.at(-1)?.k ?? '';
+          if (t && Object.hasOwn(body, 'retryVersion') && body.retryVersion !== retryVersion)
+            throw new CloudError('input', 'This conversation changed after the failed request. Review the newer messages and send a fresh request instead of retrying.');
           const history = t ? t.messages.map((m) => ({ role: m.from === "you" ? "user" : "echo", text: m.text })) : body.history;
-          const r = await cloud.chat({ history, text: path === "/cloud/chat" ? body.text : undefined, audio: path === "/cloud/voice" ? body.audio : undefined,
-            context: { ...context, threadId }, memory: mem });
+          let r;
+          try {
+            r = await cloud.chat({ history, text: path === "/cloud/chat" ? body.text : undefined, audio: path === "/cloud/voice" ? body.audio : undefined,
+              context: { ...context, threadId }, memory: mem, signal: turn.signal, ensure });
+          } catch (error) {
+            if (t && error instanceof CloudError && error.retryable === true) error.retryVersion = retryVersion;
+            throw error;
+          }
+          await ensure();
           for (const a of r.actions) if ((a.type === "calendar" || a.type === "reminder") && validEvent(a.data)) a.url = icsUrl(a.data);
           if (t) await withConversations(device, (st) => recordTurn(threadFor(st, threadId), { requestId, text: path === "/cloud/chat" ? String(body.text).slice(0, 4000) : null, result: r, now: now() }));
           return r;
         }, { save: false });
         return send(res, 200, result);
-      } catch (e) { return sendCloudError(res, e); }
+      } catch (e) { if (!res.destroyed) return sendCloudError(res, e); }
+      finally { clearTimeout(timer); res.removeListener('close', disconnected); }
     }
     return send(res, 404, "Not found");
   }
@@ -1439,9 +1456,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (gemini) {
     const chosen = String(env.GEMINI_BROWSE_MODEL ?? "").trim();
     if (chosen) { gemini.browseModels = chosen.split(",").map((x) => x.trim()).filter(Boolean); console.log(`Browsing: ${gemini.browseModels.join(" → ")} (GEMINI_BROWSE_MODEL)`); }
-    else gemini.listModels()
-      .then((names) => { gemini.browseModels = pickBrowseModels(names, gemini.model, 2); console.log(`Browsing: ${[...gemini.browseModels, gemini.model].join(" → ")}${gemini.browseModels.length ? "" : " (no other Flash model on this key)"}`); })
-      .catch((e) => console.log(`Browsing: ${gemini.model} (couldn't list models: ${e?.message ?? e})`));
+    void gemini.listModels()
+      .then((names) => {
+        gemini.fallbackModels = pickFallbackModels(names, gemini.model);
+        if (!chosen) gemini.browseModels = pickBrowseModels(names, gemini.model, 2);
+        console.log(`Phone overload fallback: ${gemini.fallbackModels.join(', ') || 'none advertised by this key'}`);
+        if (!chosen) console.log(`Browsing: ${[...gemini.browseModels, gemini.model].join(" → ")}`);
+      })
+      .catch(() => console.log('Phone fallback discovery unavailable; keeping the configured brain.'));
   }
   if (paired && env.QSTASH_TOKEN) {
     ensureSchedule({ qstashToken: env.QSTASH_TOKEN.trim(), qstashUrl: env.QSTASH_URL?.trim() || undefined, publicUrl: env.RENDER_EXTERNAL_URL, cronToken: keys.cron })

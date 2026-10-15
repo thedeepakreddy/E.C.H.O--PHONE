@@ -9,6 +9,7 @@ export const UI_TESTS={
  'test:ui:reportretry':'scripts/agent-report-retry-ui-test.mjs',
  'test:ui:trackpad':'scripts/trackpad-cancel-ui-test.mjs',
  'test:ui:markdown':'scripts/markdown-ui-test.mjs',
+ 'test:ui:cloudrecovery':'scripts/cloud-recovery-ui-test.mjs',
 };
 export const selectUI=(scripts,filters=[])=>Object.keys(UI_TESTS).filter(name=>scripts[name]===`node ${UI_TESTS[name]}`&&(!filters.length||filters.some(filter=>name.includes(filter))));
 export function validateUI(scripts){

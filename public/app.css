@@ -409,6 +409,8 @@ body.kb .reactor-glow { display: none; }
 .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .act-btn { border-radius: 999px; padding: 7px 12px; font-size: 14px; font-weight: 600; color: var(--text); max-width: 100%; text-align: left; }
 .act-btn[aria-busy="true"] { opacity: .6; }
+[data-cloud-retry] { min-height: 44px; padding: 10px 16px; }
+[data-model-notice] { display: block; margin-top: 8px; color: var(--sub); font-size: 12px; line-height: 1.45; }
 .srcs { margin-top: 6px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 2px 10px; }
 .srcs a { color: var(--cyan); text-decoration: none; }
 .msg time .via { opacity: .85; }

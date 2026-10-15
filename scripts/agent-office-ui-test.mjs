@@ -4,9 +4,10 @@ import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
 import {mkdir} from 'node:fs/promises';
 import {createRelay} from '../server.js';
+import {GeminiError} from '../lib/gemini.js';
 const pw=process.env.ECHO_BROWSER_DEPENDENCIES?await import(pathToFileURL(join(process.env.ECHO_BROWSER_DEPENDENCIES,'playwright/index.mjs')).href):await import('playwright');
 let release,turn=0;
-const gemini={model:'fixture',embed:async()=>Array(512).fill(0),generate:async body=>{turn++;if(turn===1){await new Promise(r=>release=r);return {candidates:[{content:{role:'model',parts:[{functionCall:{name:'get_today',args:{}}}]}}]};}return {candidates:[{content:{role:'model',parts:[{text:JSON.stringify(body.contents)}]}}]};}};
+const gemini={model:'gemini-3.8-flash',fallbackModels:['gemini-3.5-flash-lite'],embed:async()=>Array(512).fill(0),generate:async(body,{modelId})=>{if(modelId==='gemini-3.8-flash')throw new GeminiError('server','fixture high demand');turn++;if(turn===1){await new Promise(r=>release=r);return {candidates:[{content:{role:'model',parts:[{functionCall:{name:'get_today',args:{}}}]}}]};}return {candidates:[{content:{role:'model',parts:[{text:JSON.stringify(body.contents)}]}}]};}};
 const relay=createRelay({secret:'isolated-office-ui-fixture-'.repeat(4),gemini,fetchJson:async()=>({})}),server=http.createServer(relay.handler);
 await new Promise(r=>server.listen(0,'127.0.0.1',r));const url=`http://127.0.0.1:${server.address().port}`;await mkdir('/tmp/echo-office-ui',{recursive:true});
 const engine=process.env.ECHO_OFFICE_BROWSER||'chromium';const browser=await pw[engine].launch({headless:true,...(engine==='webkit'&&process.env.ECHO_WEBKIT_EXECUTABLE?{executablePath:process.env.ECHO_WEBKIT_EXECUTABLE}:{})});
@@ -57,6 +58,7 @@ try{
  await page.getByRole('button',{name:'Zoom out',exact:true}).click();assert.equal(await page.locator('.office-update-input').inputValue(),'Use yearly pricing','Camera controls preserve agent instructions');
  const update=page.waitForResponse(r=>r.url().endsWith('/cloud/bots')&&r.request().postDataJSON()?.action==='control');await page.getByRole('button',{name:'Send update',exact:true}).click();const accepted=await(await update).json();assert.equal(accepted.command.status,'queued');release();
  await refresh();await page.waitForFunction(()=>document.querySelector('.office-command')?.textContent.includes('Applied'));await page.waitForFunction(()=>document.querySelector('.office-output')?.textContent.includes('Use yearly pricing'));assert.match(await page.locator('.office-output').innerText(),/Use yearly pricing/);
+ assert.match(await page.locator('.office-output [data-model-notice]').innerText(),/gemini-3\.5-flash-lite/,'The actual agent inspector discloses its fallback brain');
  await page.locator('#agent-office').scrollIntoViewIfNeeded();await page.waitForFunction(()=>document.querySelector('.office-canvas').dataset.workingScreens==='0');
  await page.getByRole('button',{name:'Follow up',exact:true}).first().click();assert.equal(await page.locator('#bots-assignment').evaluate(d=>d.open),true);await page.locator('#bots-goal').fill('Explain the verified options');await page.locator('#bots-run button[type=submit]').click();await page.waitForFunction(()=>document.querySelector('.office-goal')?.textContent==='Explain the verified options');
  // A completed follow-up can legitimately redraw once. Observe reduced motion
